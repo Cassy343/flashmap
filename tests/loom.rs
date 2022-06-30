@@ -1,6 +1,6 @@
 mod util;
 
-use fast_evmap::ReadHandle;
+use flashmap::ReadHandle;
 use util::thread;
 
 trait BoolExt {
@@ -16,7 +16,7 @@ impl BoolExt for bool {
 #[test]
 pub fn only_readers() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = fast_evmap::new::<String, String>();
+        let (mut write, read) = flashmap::new::<String, String>();
 
         let mut guard = write.guard();
         guard.insert("a".to_owned(), "foo".to_owned());
@@ -46,7 +46,7 @@ pub fn only_readers() {
 #[test]
 pub fn reader_and_writer() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = fast_evmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
 
         let t1 = thread::spawn(move || {
             write.guard().insert(10, Box::new(20));
@@ -68,7 +68,7 @@ pub fn reader_and_writer() {
 #[test]
 pub fn many_writes() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = fast_evmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
 
         let t1 = thread::spawn(move || {
             write.guard().insert(10, Box::new(20));
@@ -91,7 +91,7 @@ pub fn many_writes() {
 #[test]
 pub fn complex_read_many_writes() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = fast_evmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
 
         let t1 = thread::spawn(move || {
             write.guard().insert(10, Box::new(20));
@@ -125,7 +125,7 @@ pub fn complex_read_many_writes() {
 #[test]
 pub fn many_handles() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = fast_evmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
 
         let t1 = thread::spawn(move || {
             write.guard().insert(10, Box::new(20));
@@ -158,67 +158,30 @@ pub fn many_handles() {
     });
 }
 
-// #[test]
-// pub fn many_reads_many_writes() {
-//     util::maybe_loom_model(|| {
-//         let (mut write, read) = fast_evmap::new::<u32, u32>();
+#[test]
+#[cfg(long_test)]
+pub fn many_reads_many_writes() {
+    util::maybe_loom_model(|| {
+        let (mut write, read) = flashmap::new::<u32, u32>();
 
-//         let t1 = thread::spawn(move || {
-//             write.guard().insert(10, 20);
-//             write.guard().insert(20, 40);
-//         });
+        let t1 = thread::spawn(move || {
+            write.guard().insert(10, 20);
+            write.guard().insert(20, 40);
+        });
 
-//         let t2 = thread::spawn({
-//             let read = read.clone();
-//             move || {
-//                 assert!(matches!(read.guard().get(&10).copied(), Some(20) | None));
-//             }
-//         });
+        let t2 = thread::spawn({
+            let read = read.clone();
+            move || {
+                assert!(matches!(read.guard().get(&10).copied(), Some(20) | None));
+            }
+        });
 
-//         let t3 = thread::spawn(move || {
-//             assert!(matches!(read.guard().get(&20).copied(), Some(40) | None));
-//         });
+        let t3 = thread::spawn(move || {
+            assert!(matches!(read.guard().get(&20).copied(), Some(40) | None));
+        });
 
-//         t1.join().unwrap();
-//         t2.join().unwrap();
-//         t3.join().unwrap();
-//     });
-// }
-
-// #[test]
-// pub fn complex_use() {
-//     util::maybe_loom_model(|| {
-//         let (mut write, read) = fast_evmap::new::<u32, u32>();
-
-//         let t1 = thread::spawn(move || {
-//             write.guard().insert(10, 20);
-//             write.guard().insert(20, 40);
-//             write.guard().insert(40, 80);
-//         });
-
-//         let t2 = thread::spawn({
-//             let read = read.clone();
-//             move || {
-//                 let x = read.guard().get(&20).copied();
-//                 assert!(matches!(x, Some(40) | None));
-//                 let y = read.guard().get(&10).copied();
-//                 assert!(matches!(y, Some(20) | None));
-//                 assert!(x.is_some().implies(y.is_some()));
-//             }
-//         });
-
-//         let t3 = thread::spawn(move || {
-//             let guard1 = read.guard();
-//             assert!(matches!(guard1.get(&10).copied(), Some(20) | None));
-//             let guard2 = read.guard();
-//             assert!(matches!(guard2.get(&40).copied(), Some(80) | None));
-//             drop(guard2);
-//             assert!(matches!(guard1.get(&20).copied(), Some(40) | None));
-//             drop(guard1);
-//         });
-
-//         t1.join().unwrap();
-//         t2.join().unwrap();
-//         t3.join().unwrap();
-//     });
-// }
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
+    });
+}

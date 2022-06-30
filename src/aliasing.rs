@@ -4,112 +4,83 @@ use std::{
     hash::{Hash, Hasher},
     marker::PhantomData,
     mem::MaybeUninit,
+    ops::Deref,
     path::{Path, PathBuf},
     ptr,
 };
 
 #[repr(transparent)]
-pub struct MaybeAliased<T, S = Unsafe> {
+pub struct Alias<T> {
     value: MaybeUninit<T>,
-    _safety: PhantomData<S>,
     _not_send_sync: PhantomData<*const ()>,
 }
 
-unsafe impl<T, S> Send for MaybeAliased<T, S> where T: Send + Sync {}
-unsafe impl<T, S> Sync for MaybeAliased<T, S> where T: Sync {}
+unsafe impl<T> Send for Alias<T> where T: Send + Sync {}
+unsafe impl<T> Sync for Alias<T> where T: Send + Sync {}
 
-impl<T> MaybeAliased<T, Unsafe> {
+impl<T> Alias<T> {
     #[inline]
     pub const fn new(val: T) -> Self {
         Self {
             value: MaybeUninit::new(val),
-            _safety: PhantomData,
             _not_send_sync: PhantomData,
         }
     }
 
     #[inline]
-    pub const fn new_ref(val: &T) -> &Self {
-        unsafe { &*(val as *const _ as *const Self) }
+    pub unsafe fn copy(other: &Self) -> Self {
+        Self {
+            value: ptr::read(&other.value),
+            _not_send_sync: PhantomData,
+        }
     }
 
     #[inline]
-    pub unsafe fn get(&self) -> &T {
-        self.value.assume_init_ref()
+    pub unsafe fn into_owned(alias: Self) -> T {
+        alias.value.assume_init()
+    }
+
+    #[inline]
+    pub unsafe fn drop(alias: &mut Self) {
+        alias.value.assume_init_drop()
     }
 }
 
-impl<T> MaybeAliased<T, ReadSafe> {
-    #[inline]
-    pub const unsafe fn new_read_safe(val: T) -> Self {
-        Self {
-            value: MaybeUninit::new(val),
-            _safety: PhantomData,
-            _not_send_sync: PhantomData,
-        }
-    }
+impl<T> Deref for Alias<T> {
+    type Target = T;
 
     #[inline]
-    pub const unsafe fn new_ref_read_safe(val: &T) -> &Self {
-        &*(val as *const _ as *const Self)
-    }
-
-    #[inline]
-    pub fn safe_get(&self) -> &T {
+    fn deref(&self) -> &Self::Target {
         unsafe { self.value.assume_init_ref() }
     }
 }
 
-impl<T, S> MaybeAliased<T, S> {
-    #[inline]
-    pub unsafe fn alias(&self) -> Self {
-        Self {
-            value: ptr::read(&self.value),
-            _safety: PhantomData,
-            _not_send_sync: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub unsafe fn into_owned(self) -> T {
-        self.value.assume_init()
-    }
-
-    #[inline]
-    pub unsafe fn drop(self) {
-        drop(self.into_owned())
-    }
-}
-
-pub enum Unsafe {}
-pub enum ReadSafe {}
-
-impl<T: PartialEq> PartialEq for MaybeAliased<T, ReadSafe> {
+impl<T: PartialEq> PartialEq for Alias<T> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.safe_get().eq(other.safe_get())
+        PartialEq::eq(&**self, &**other)
     }
 }
 
-impl<T: Eq> Eq for MaybeAliased<T, ReadSafe> {}
+impl<T: Eq> Eq for Alias<T> {}
 
-impl<T: Hash> Hash for MaybeAliased<T, ReadSafe> {
+impl<T: Hash> Hash for Alias<T> {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.safe_get().hash(state)
+        (**self).hash(state)
     }
 }
 
 macro_rules! impl_borrow {
     ($( ($T:ty, $U:ty) ),*) => {
         $(
-            impl Borrow<$U> for MaybeAliased<$T, ReadSafe>
+            impl Borrow<$U> for Alias<$T>
             where
                 $T: Borrow<$U>,
             {
                 #[inline]
                 fn borrow(&self) -> &$U {
-                    self.safe_get().borrow()
+                    (**self).borrow()
                 }
             }
         )*
@@ -123,23 +94,23 @@ impl_borrow! {
     (CString, CStr)
 }
 
-impl<T> Borrow<T> for MaybeAliased<Box<T>, ReadSafe> {
+impl<T> Borrow<T> for Alias<Box<T>> {
     #[inline]
     fn borrow(&self) -> &T {
-        self.safe_get().borrow()
+        (**self).borrow()
     }
 }
 
-impl<T> Borrow<T> for MaybeAliased<std::sync::Arc<T>, ReadSafe> {
+impl<T> Borrow<T> for Alias<std::sync::Arc<T>> {
     #[inline]
     fn borrow(&self) -> &T {
-        self.safe_get().borrow()
+        (**self).borrow()
     }
 }
 
-impl<T> Borrow<T> for MaybeAliased<T, ReadSafe> {
+impl<T> Borrow<T> for Alias<T> {
     #[inline]
     fn borrow(&self) -> &T {
-        self.safe_get()
+        &**self
     }
 }

@@ -1,19 +1,25 @@
 use hashbrown::hash_map::DefaultHashBuilder;
 use slab::Slab;
 
-use crate::loom::{
-    cell::{Cell, UnsafeCell},
-    sync::{
-        atomic::{AtomicU8, AtomicUsize, Ordering},
-        Arc, Mutex,
+use crate::Builder;
+use crate::{
+    aliasing::Alias,
+    loom::{
+        cell::{Cell, UnsafeCell},
+        sync::{
+            atomic::{fence, AtomicU8, AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+        thread::{self, Thread},
     },
-    thread::{self, Thread},
 };
-use crate::Options;
 use crate::{cache_padded::CachePadded, Map, ReadHandle, WriteHandle};
-use std::mem;
 use std::process::abort;
 use std::ptr::{self, NonNull};
+use std::{
+    hash::{BuildHasher, Hash},
+    mem,
+};
 
 const WRITABLE: u8 = 0;
 const NOT_WRITABLE: u8 = 1;
@@ -30,8 +36,12 @@ pub struct Handle<K, V, S = DefaultHashBuilder> {
     maps: OwnedMapAccess<K, V, S>,
 }
 
-impl<K, V, S> Handle<K, V, S> {
-    pub fn new(options: Options<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
+impl<K, V, S> Handle<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
+    pub fn new(options: Builder<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
         let (capacity, h1, h2) = options.into_args();
 
         let maps = Box::new([
@@ -99,7 +109,7 @@ impl<K, V, S> Handle<K, V, S> {
             WRITABLE => (),
             NOT_WRITABLE => {
                 self.writer_thread
-                    .with_mut(|ptr| ptr::write(ptr, Some(thread::current())));
+                    .with_mut(|ptr| drop(ptr::replace(ptr, Some(thread::current()))));
 
                 match self.writer_state.compare_exchange(
                     NOT_WRITABLE,
@@ -125,18 +135,19 @@ impl<K, V, S> Handle<K, V, S> {
 
     #[inline]
     pub unsafe fn finish_write(&self) {
+        debug_assert_eq!(self.residual.load(Ordering::Acquire), 0);
+
         self.writer_state.store(NOT_WRITABLE, Ordering::Relaxed);
 
-        let mut residual = 0;
+        fence(Ordering::Release);
 
         // Acquire
         let guard = self.refcounts.lock().unwrap();
 
-        // debug_assert_eq!(self.residual.load(Ordering::SeqCst), 0);
-
-        for refcount in guard.iter().map(|(_, refcount)| refcount.as_ref()) {
-            residual += refcount.swap_maps();
-        }
+        let residual = guard
+            .iter()
+            .map(|(_, refcount)| refcount.as_ref().swap_maps())
+            .sum::<usize>();
 
         // This needs to be within the mutex
         self.writer_map.set(self.writer_map.get().other());
@@ -144,7 +155,9 @@ impl<K, V, S> Handle<K, V, S> {
         // Release
         drop(guard);
 
-        residual = residual.wrapping_add(self.residual.fetch_add(residual, Ordering::AcqRel));
+        fence(Ordering::Acquire);
+
+        let residual = residual.wrapping_add(self.residual.fetch_add(residual, Ordering::AcqRel));
         if residual == 0 {
             self.writer_state.store(WRITABLE, Ordering::Release);
         }
@@ -156,10 +169,12 @@ impl<K, V, S> Drop for Handle<K, V, S> {
         let reader_map_index = self.writer_map.get().other();
         unsafe {
             self.maps.access.get(reader_map_index).with_mut(|ptr| {
-                (&mut *ptr).drain().for_each(|(key, value)| {
-                    key.drop();
-                    value.drop();
-                });
+                (&mut *ptr)
+                    .drain()
+                    .for_each(|(ref mut key, ref mut value)| {
+                        Alias::drop(key);
+                        Alias::drop(value);
+                    });
             });
         }
     }
@@ -216,7 +231,9 @@ impl RefCount {
 
     #[inline]
     unsafe fn swap_maps(&self) -> usize {
-        let old_value = self.value.fetch_add(Self::MAP_INDEX_FLAG, Ordering::AcqRel);
+        let old_value = self
+            .value
+            .fetch_add(Self::MAP_INDEX_FLAG, Ordering::Relaxed);
         Self::to_refcount(old_value)
     }
 }

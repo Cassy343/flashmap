@@ -1,9 +1,9 @@
 use std::{
     fmt::{self, Debug, Formatter},
-    hash::BuildHasher,
+    hash::{BuildHasher, Hash},
 };
 
-use aliasing::{MaybeAliased, ReadSafe};
+use aliasing::Alias;
 use handle::Handle;
 use hashbrown::hash_map::DefaultHashBuilder;
 
@@ -17,31 +17,37 @@ mod write;
 pub use read::*;
 pub use write::*;
 
-pub type Map<K, V, S = DefaultHashBuilder> =
-    hashbrown::HashMap<MaybeAliased<K, ReadSafe>, MaybeAliased<V>, S>;
+pub type Map<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
 
-pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>) {
-    Options::new().build()
+pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>)
+where
+    K: Eq + Hash,
+{
+    Builder::new().build()
 }
 
-pub fn with_capacity<K, V>(capacity: usize) -> (WriteHandle<K, V>, ReadHandle<K, V>) {
-    Options::new().with_capacity(capacity).build()
+pub fn with_capacity<K, V>(capacity: usize) -> (WriteHandle<K, V>, ReadHandle<K, V>)
+where
+    K: Eq + Hash,
+{
+    Builder::new().with_capacity(capacity).build()
 }
 
 pub fn with_hasher<K, V, S>(hasher: S) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
 where
+    K: Eq + Hash,
     S: Clone + BuildHasher,
 {
-    Options::new().with_hasher(hasher).build()
+    Builder::new().with_hasher(hasher).build()
 }
 
 #[derive(Clone, Copy)]
-pub struct Options<S = DefaultHashBuilder> {
+pub struct Builder<S = DefaultHashBuilder> {
     capacity: usize,
     hasher: HasherGen<S>,
 }
 
-impl<S> Debug for Options<S> {
+impl<S> Debug for Builder<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Options")
             .field("capacity", &self.capacity)
@@ -50,7 +56,7 @@ impl<S> Debug for Options<S> {
     }
 }
 
-impl Options<DefaultHashBuilder> {
+impl Builder<DefaultHashBuilder> {
     pub fn new() -> Self {
         Self {
             capacity: 0,
@@ -62,7 +68,7 @@ impl Options<DefaultHashBuilder> {
     }
 }
 
-impl<S> Options<S> {
+impl<S> Builder<S> {
     pub fn with_capacity(self, capacity: usize) -> Self {
         Self {
             capacity,
@@ -70,27 +76,31 @@ impl<S> Options<S> {
         }
     }
 
-    pub fn with_hasher<H>(self, hasher: H) -> Options<H>
+    pub fn with_hasher<H>(self, hasher: H) -> Builder<H>
     where
         H: Clone + BuildHasher,
     {
-        Options {
+        Builder {
             capacity: self.capacity,
             hasher: HasherGen::Clone(hasher, H::clone),
         }
     }
 
-    pub fn with_hasher_fn<H>(self, make: fn() -> H) -> Options<H>
+    pub fn with_hasher_fn<H>(self, make: fn() -> H) -> Builder<H>
     where
         H: BuildHasher,
     {
-        Options {
+        Builder {
             capacity: self.capacity,
             hasher: HasherGen::Make(make),
         }
     }
 
-    pub fn build<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
+    pub fn build<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
+    where
+        K: Eq + Hash,
+        S: BuildHasher,
+    {
         Handle::new(self)
     }
 

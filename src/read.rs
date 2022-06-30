@@ -1,13 +1,14 @@
 use std::{
     borrow::Borrow,
     hash::{BuildHasher, Hash},
+    ops::Deref,
     ptr::NonNull,
 };
 
 use hashbrown::hash_map::DefaultHashBuilder;
 
 use crate::{
-    aliasing::{MaybeAliased, ReadSafe},
+    aliasing::Alias,
     handle::{Handle, MapAccess, MapIndex, ReaderStatus, RefCount},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
@@ -72,13 +73,43 @@ pub struct ReadGuard<'a, K, V, S> {
 
 impl<'a, K, V, S: BuildHasher> ReadGuard<'a, K, V, S> {
     #[inline]
+    pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
+    where
+        Alias<K>: Borrow<Q> + Eq + Hash,
+        Q: Hash + Eq,
+    {
+        self.map.with(|ptr| unsafe { &*ptr }.contains_key(key))
+    }
+
+    #[inline]
     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
     where
-        MaybeAliased<K, ReadSafe>: Borrow<Q> + Eq + Hash,
+        Alias<K>: Borrow<Q> + Eq + Hash,
         Q: Hash + Eq,
     {
         self.map
-            .with(|ptr| unsafe { (&*ptr).get(key).map(|value| value.get()) })
+            .with(|ptr| unsafe { &*ptr }.get(key).map(|value| &**value))
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.map.with(|ptr| {
+            unsafe { &*ptr }
+                .iter()
+                .map(|(key, value)| (&**key, &**value))
+        })
+    }
+
+    #[inline]
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.map
+            .with(|ptr| unsafe { &*ptr }.keys().map(Deref::deref))
+    }
+
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.map
+            .with(|ptr| unsafe { &*ptr }.values().map(Deref::deref))
     }
 }
 
