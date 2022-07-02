@@ -1,6 +1,6 @@
 mod util;
 
-use flashmap::ReadHandle;
+use flashmap::{ReadHandle, RemovalResult};
 use util::thread;
 
 trait BoolExt {
@@ -81,6 +81,37 @@ pub fn many_writes() {
             let y = read.guard().get(&10).map(|x| **x);
             assert!(matches!(y, Some(20) | None));
             assert!(x.is_some().implies(y.is_some()));
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+    });
+}
+
+#[test]
+pub fn many_different_writes() {
+    util::maybe_loom_model(|| {
+        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+
+        write.guard().insert(10, Box::new(20));
+
+        let t1 = thread::spawn(move || {
+            write.guard().insert(20, Box::new(40));
+
+            assert!(write.guard().rcu(20, |x| Box::new(**x + 5)));
+
+            assert_eq!(write.guard().remove(10), RemovalResult::Removed);
+        });
+
+        let t2 = thread::spawn(move || {
+            let x = read.guard().get(&10).map(|x| **x);
+            assert!(matches!(x, Some(20) | None));
+
+            let y = read.guard().get(&20).map(|x| **x);
+            assert!(matches!(y, Some(40) | Some(45) | None));
+
+            assert!(matches!(y, Some(40) | None).implies(x.is_some()));
+            assert!(x.is_none().implies(y == Some(45)));
         });
 
         t1.join().unwrap();

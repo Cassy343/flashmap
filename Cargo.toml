@@ -13,9 +13,13 @@ keywords = ["map", "concurrent", "hashamp"]
 categories = ["concurrency", "data-structures"]
 
 [dependencies]
-hashbrown = "0.12.1"
 num_cpus = "1.13.1"
 slab = "0.4.6"
+
+[dependencies.hashbrown]
+version = "0.12.1"
+default-features = false
+features = ["inline-more"]
 
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.5.6", features = ["checkpoint"] }
@@ -23,3 +27,4 @@ loom = { version = "0.5.6", features = ["checkpoint"] }
 [profile.loomtest]
 inherits = "release"
 debug = 2
+debug-assertions = true

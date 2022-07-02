@@ -1,3 +1,6 @@
+// This code is not original to the flashmap project.
+// Source: https://github.com/crossbeam-rs/crossbeam/blob/1e16fc044ebb7bf1da618f07577bc369120e6ab6/crossbeam-utils/src/cache_padded.rs
+
 use std::{
     fmt::{self, Debug, Formatter},
     ops::{Deref, DerefMut},

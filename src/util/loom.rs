@@ -39,13 +39,5 @@ pub mod cell {
         {
             f(self.inner.get())
         }
-
-        #[inline(always)]
-        pub unsafe fn with_raw_mut<F, R>(this: *const Self, f: F) -> R
-        where
-            F: FnOnce(*mut T) -> R,
-        {
-            (&*this).with_mut(f)
-        }
     }
 }

@@ -3,7 +3,7 @@ use slab::Slab;
 
 use crate::Builder;
 use crate::{
-    aliasing::Alias,
+    core::MapIndex,
     loom::{
         cell::{Cell, UnsafeCell},
         sync::{
@@ -12,14 +12,14 @@ use crate::{
         },
         thread::{self, Thread},
     },
+    util::Alias,
 };
-use crate::{cache_padded::CachePadded, Map, ReadHandle, WriteHandle};
-use std::process::abort;
+use crate::{util::CachePadded, Map, ReadHandle, WriteHandle};
+use std::hash::{BuildHasher, Hash};
 use std::ptr::{self, NonNull};
-use std::{
-    hash::{BuildHasher, Hash},
-    mem,
-};
+use std::process::abort;
+
+use super::{OwnedMapAccess, RefCount};
 
 const WRITABLE: u8 = 0;
 const NOT_WRITABLE: u8 = 1;
@@ -85,6 +85,20 @@ impl<K, V, S> Handle<K, V, S> {
     }
 
     #[inline]
+    pub fn start_read(refcount: &RefCount) -> MapIndex {
+        refcount.increment()
+    }
+
+    #[inline]
+    pub fn finish_read(refcount: &RefCount, map_index: MapIndex) -> ReaderStatus {
+        if refcount.decrement() == map_index {
+            ReaderStatus::Normal
+        } else {
+            ReaderStatus::Residual
+        }
+    }
+
+    #[inline]
     pub unsafe fn release_refcount(&self, key: usize) {
         drop(Box::from_raw(
             self.refcounts.lock().unwrap().remove(key).as_ptr(),
@@ -93,16 +107,18 @@ impl<K, V, S> Handle<K, V, S> {
 
     #[inline]
     pub unsafe fn release_residual(&self) {
-        // TODO: why does loom fail if this is anything less than AcqRel?
+        // TODO: why does loom fail if either of these are anything weaker than AcqRel?
+
         if self.residual.fetch_sub(1, Ordering::AcqRel) == 1 {
             if self.writer_state.swap(WRITABLE, Ordering::AcqRel) == WAITING_ON_READERS {
                 self.writer_thread.with(|ptr| {
-                    (*ptr).as_ref().map(|thread| thread.unpark());
+                    (*ptr).as_ref().map(Thread::unpark);
                 });
             }
         }
     }
 
+    // TODO: remove this code smell
     #[inline]
     pub unsafe fn start_write<'w>(&self) -> &'w UnsafeCell<Map<K, V, S>> {
         match self.writer_state.load(Ordering::Acquire) {
@@ -111,18 +127,33 @@ impl<K, V, S> Handle<K, V, S> {
                 self.writer_thread
                     .with_mut(|ptr| drop(ptr::replace(ptr, Some(thread::current()))));
 
-                match self.writer_state.compare_exchange(
+                let exchange_result = self.writer_state.compare_exchange(
                     NOT_WRITABLE,
                     WAITING_ON_READERS,
                     Ordering::Release,
                     Ordering::Relaxed,
-                ) {
-                    Ok(NOT_WRITABLE) | Err(WRITABLE) => (),
-                    _ => unreachable!(),
-                }
+                );
+                
+                debug_assert!(matches!(exchange_result, Ok(NOT_WRITABLE) | Err(WRITABLE)));
             }
-            WAITING_ON_READERS => panic!("Concurrent calls to start_write"),
-            _ => unreachable!(),
+            WAITING_ON_READERS => {
+                #[cfg(debug_assertions)]
+                {
+                    panic!("Concurrent calls to start_write")
+                }
+
+                // This branch could only ever be taken if our internal implementation is wrong,
+                // so no need to keep the debug info around in release builds
+                #[cfg(not(debug_assertions))]
+                {
+                    abort()
+                }
+            },
+            _ => {
+                // We never store any other value in this atomic, so this branch *really* should
+                // not be reachable
+                abort();
+            },
         };
 
         // Wait for the current write map to become available
@@ -130,12 +161,12 @@ impl<K, V, S> Handle<K, V, S> {
             thread::park();
         }
 
-        &*(self.maps.maps()[self.writer_map.get() as usize] as *const _)
+        &*(self.maps.get(self.writer_map.get()) as *const _)
     }
 
     #[inline]
     pub unsafe fn finish_write(&self) {
-        debug_assert_eq!(self.residual.load(Ordering::Acquire), 0);
+        debug_assert_eq!(self.residual.load(Ordering::Relaxed), 0);
 
         self.writer_state.store(NOT_WRITABLE, Ordering::Relaxed);
 
@@ -167,74 +198,14 @@ impl<K, V, S> Handle<K, V, S> {
 impl<K, V, S> Drop for Handle<K, V, S> {
     fn drop(&mut self) {
         let reader_map_index = self.writer_map.get().other();
-        unsafe {
-            self.maps.access.get(reader_map_index).with_mut(|ptr| {
-                (&mut *ptr)
-                    .drain()
-                    .for_each(|(ref mut key, ref mut value)| {
-                        Alias::drop(key);
-                        Alias::drop(value);
-                    });
-            });
-        }
-    }
-}
-
-pub struct RefCount {
-    value: CachePadded<AtomicUsize>,
-}
-
-impl RefCount {
-    const MAP_INDEX_FLAG: usize = 1usize << (usize::BITS - 1);
-    const COUNT_MASK: usize = (1usize << (usize::BITS - 2)) - 1;
-
-    fn new(read_index: MapIndex) -> Self {
-        Self {
-            value: CachePadded::new(AtomicUsize::new((read_index as usize) << (usize::BITS - 1))),
-        }
-    }
-
-    #[inline]
-    fn check_overflow(value: usize) {
-        if Self::to_refcount(value) == Self::COUNT_MASK {
-            abort();
-        }
-    }
-
-    #[inline]
-    fn to_refcount(value: usize) -> usize {
-        value & Self::COUNT_MASK
-    }
-
-    #[inline]
-    fn to_map_index(value: usize) -> MapIndex {
-        unsafe { MapIndex::from_usize_unchecked(value >> (usize::BITS - 1)) }
-    }
-
-    #[inline]
-    pub fn increment(&self) -> MapIndex {
-        let old = self.value.fetch_add(1, Ordering::Acquire);
-        Self::check_overflow(old);
-        Self::to_map_index(old)
-    }
-
-    #[inline]
-    pub fn decrement(&self, map_index: MapIndex) -> ReaderStatus {
-        let old_value = self.value.fetch_sub(1, Ordering::Release);
-
-        if Self::to_map_index(old_value) != map_index {
-            ReaderStatus::Residual
-        } else {
-            ReaderStatus::Normal
-        }
-    }
-
-    #[inline]
-    unsafe fn swap_maps(&self) -> usize {
-        let old_value = self
-            .value
-            .fetch_add(Self::MAP_INDEX_FLAG, Ordering::Relaxed);
-        Self::to_refcount(old_value)
+        self.maps.get(reader_map_index).with_mut(|ptr| unsafe {
+            (&mut *ptr)
+                .drain()
+                .for_each(|(ref mut key, ref mut value)| {
+                    Alias::drop(key);
+                    Alias::drop(value);
+                });
+        });
     }
 }
 
@@ -242,75 +213,4 @@ impl RefCount {
 pub enum ReaderStatus {
     Normal,
     Residual,
-}
-
-#[repr(usize)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum MapIndex {
-    First = 0,
-    Second = 1,
-}
-
-impl MapIndex {
-    #[inline]
-    pub unsafe fn from_usize_unchecked(index: usize) -> Self {
-        mem::transmute(index)
-    }
-
-    #[inline]
-    pub fn other(self) -> Self {
-        match self {
-            Self::First => Self::Second,
-            Self::Second => Self::First,
-        }
-    }
-}
-
-struct OwnedMapAccess<K, V, S> {
-    access: MapAccess<K, V, S>,
-}
-
-impl<K, V, S> OwnedMapAccess<K, V, S> {
-    fn new(boxed: Box<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>) -> Self {
-        Self {
-            access: MapAccess::new(NonNull::new(Box::into_raw(boxed)).unwrap()),
-        }
-    }
-
-    #[inline]
-    fn maps(&self) -> [&UnsafeCell<Map<K, V, S>>; 2] {
-        [0, 1].map(|index| unsafe { &*self.access.maps.as_ref()[index] })
-    }
-
-    #[inline]
-    fn share(&self) -> MapAccess<K, V, S> {
-        self.access.clone()
-    }
-}
-
-impl<K, V, S> Drop for OwnedMapAccess<K, V, S> {
-    fn drop(&mut self) {
-        unsafe {
-            drop(Box::from_raw(self.access.maps.as_ptr()));
-        }
-    }
-}
-
-pub struct MapAccess<K, V, S> {
-    maps: NonNull<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>,
-}
-
-impl<K, V, S> MapAccess<K, V, S> {
-    fn new(maps: NonNull<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>) -> Self {
-        Self { maps }
-    }
-
-    #[inline]
-    pub unsafe fn get(&self, map_index: MapIndex) -> &UnsafeCell<Map<K, V, S>> {
-        &*self.maps.as_ref()[map_index as usize]
-    }
-
-    fn clone(&self) -> Self {
-        Self { maps: self.maps }
-    }
 }

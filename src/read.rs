@@ -1,21 +1,20 @@
 use std::{
     borrow::Borrow,
+    collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
     ops::Deref,
     ptr::NonNull,
 };
 
-use hashbrown::hash_map::DefaultHashBuilder;
-
 use crate::{
-    aliasing::Alias,
-    handle::{Handle, MapAccess, MapIndex, ReaderStatus, RefCount},
+    core::{Handle, MapAccess, MapIndex, ReaderStatus, RefCount},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
+    util::Alias,
     Map,
 };
 
-pub struct ReadHandle<K, V, S = DefaultHashBuilder> {
+pub struct ReadHandle<K, V, S = RandomState> {
     inner: Arc<Handle<K, V, S>>,
     map_access: MapAccess<K, V, S>,
     refcount: NonNull<RefCount>,
@@ -25,7 +24,7 @@ pub struct ReadHandle<K, V, S = DefaultHashBuilder> {
 unsafe impl<K, V, S> Send for ReadHandle<K, V, S> where Arc<Map<K, V, S>>: Send {}
 
 impl<K, V, S> ReadHandle<K, V, S> {
-    pub fn new(
+    pub(crate) fn new(
         inner: Arc<Handle<K, V, S>>,
         map_access: MapAccess<K, V, S>,
         refcount: NonNull<RefCount>,
@@ -41,7 +40,7 @@ impl<K, V, S> ReadHandle<K, V, S> {
 
     #[inline]
     pub fn guard(&self) -> ReadGuard<'_, K, V, S> {
-        let map_index = unsafe { self.refcount.as_ref().increment() };
+        let map_index = unsafe { Handle::<K, V, S>::start_read(self.refcount.as_ref()) };
 
         ReadGuard {
             handle: self,
@@ -72,6 +71,11 @@ pub struct ReadGuard<'a, K, V, S> {
 }
 
 impl<'a, K, V, S: BuildHasher> ReadGuard<'a, K, V, S> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.map.with(|ptr| unsafe { (&*ptr).len() })
+    }
+
     #[inline]
     pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
     where
@@ -116,7 +120,7 @@ impl<'a, K, V, S: BuildHasher> ReadGuard<'a, K, V, S> {
 impl<'a, K, V, S> Drop for ReadGuard<'a, K, V, S> {
     fn drop(&mut self) {
         let refcount = unsafe { self.handle.refcount.as_ref() };
-        if refcount.decrement(self.map_index) == ReaderStatus::Residual {
+        if Handle::<K, V, S>::finish_read(refcount, self.map_index) == ReaderStatus::Residual {
             unsafe { self.handle.inner.release_residual() };
         }
     }

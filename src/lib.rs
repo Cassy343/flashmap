@@ -1,23 +1,21 @@
 use std::{
+    collections::hash_map::RandomState,
     fmt::{self, Debug, Formatter},
     hash::{BuildHasher, Hash},
 };
 
-use aliasing::Alias;
-use handle::Handle;
-use hashbrown::hash_map::DefaultHashBuilder;
+use util::Alias;
 
-mod aliasing;
-mod cache_padded;
-mod handle;
-mod loom;
-pub mod read;
+mod core;
+mod read;
+mod util;
 mod write;
 
 pub use read::*;
+pub(crate) use util::loom;
 pub use write::*;
 
-pub type Map<K, V, S = DefaultHashBuilder> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
+pub type Map<K, V, S = RandomState> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
 
 pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where
@@ -42,26 +40,26 @@ where
 }
 
 #[derive(Clone, Copy)]
-pub struct Builder<S = DefaultHashBuilder> {
+pub struct Builder<S = RandomState> {
     capacity: usize,
     hasher: HasherGen<S>,
 }
 
 impl<S> Debug for Builder<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Options")
+        f.debug_struct("Builder")
             .field("capacity", &self.capacity)
             .field("hasher", &std::any::type_name::<S>())
             .finish()
     }
 }
 
-impl Builder<DefaultHashBuilder> {
+impl Builder<RandomState> {
     pub fn new() -> Self {
         Self {
             capacity: 0,
             hasher: HasherGen::MakeAndClone(|| {
-                let hasher = DefaultHashBuilder::default();
+                let hasher = RandomState::default();
                 (hasher.clone(), hasher)
             }),
         }
@@ -101,7 +99,7 @@ impl<S> Builder<S> {
         K: Eq + Hash,
         S: BuildHasher,
     {
-        Handle::new(self)
+        core::Handle::new(self)
     }
 
     pub(crate) fn into_args(self) -> (usize, S, S) {

@@ -1,10 +1,13 @@
-use std::hash::{BuildHasher, Hash};
+use std::{
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hash},
+};
 
-use hashbrown::hash_map::{DefaultHashBuilder, RawEntryMut};
+use hashbrown::hash_map::RawEntryMut;
 
-use crate::{aliasing::Alias, handle::Handle, loom::cell::UnsafeCell, loom::sync::Arc, Map};
+use crate::{core::Handle, loom::cell::UnsafeCell, loom::sync::Arc, util::Alias, Map};
 
-pub struct WriteHandle<K, V, S = DefaultHashBuilder>
+pub struct WriteHandle<K, V, S = RandomState>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -26,7 +29,7 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub fn new(inner: Arc<Handle<K, V, S>>) -> Self {
+    pub(crate) fn new(inner: Arc<Handle<K, V, S>>) -> Self {
         Self {
             inner,
             operations: Vec::new(),
@@ -89,7 +92,6 @@ where
     }
 }
 
-// TODO: remove this code smell
 pub struct WriteGuard<'a, K, V, S>
 where
     K: Hash + Eq,

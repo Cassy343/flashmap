@@ -36,7 +36,7 @@ impl<T> Alias<T> {
     }
 
     #[inline]
-    pub unsafe fn into_owned(alias: Self) -> T {
+    pub const unsafe fn into_owned(alias: Self) -> T {
         alias.value.assume_init()
     }
 
