@@ -1,10 +1,6 @@
-use std::{
-    collections::hash_map::RandomState,
-    fmt::{self, Debug, Formatter},
-    hash::{BuildHasher, Hash},
-};
-
-use util::Alias;
+#![deny(rust_2018_idioms, unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs, missing_debug_implementations)]
+#![doc = include_str!("../README.md")]
 
 mod core;
 mod read;
@@ -13,9 +9,16 @@ mod write;
 
 pub use read::*;
 pub(crate) use util::loom;
+pub use util::Alias;
 pub use write::*;
 
-pub type Map<K, V, S = RandomState> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
+use std::{
+    collections::hash_map::RandomState,
+    fmt::{self, Debug, Formatter},
+    hash::{BuildHasher, Hash},
+};
+
+pub(crate) type Map<K, V, S = RandomState> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
 
 pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where

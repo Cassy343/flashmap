@@ -16,7 +16,7 @@ impl MapIndex {
         match index {
             0 => Some(Self::First),
             1 => Some(Self::Second),
-            _ => None
+            _ => None,
         }
     }
 
@@ -70,7 +70,8 @@ impl<K, V, S> MapAccess<K, V, S> {
 
     #[inline]
     pub unsafe fn get(&self, map_index: MapIndex) -> &UnsafeCell<Map<K, V, S>> {
-        &*self.maps.as_ref()[map_index as usize]
+        let maps = unsafe { &*self.maps.as_ref() };
+        &maps[map_index as usize]
     }
 
     fn clone(&self) -> Self {

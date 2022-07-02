@@ -16,8 +16,8 @@ use crate::{
 };
 use crate::{util::CachePadded, Map, ReadHandle, WriteHandle};
 use std::hash::{BuildHasher, Hash};
-use std::ptr::{self, NonNull};
 use std::process::abort;
+use std::ptr::{self, NonNull};
 
 use super::{OwnedMapAccess, RefCount};
 
@@ -100,9 +100,9 @@ impl<K, V, S> Handle<K, V, S> {
 
     #[inline]
     pub unsafe fn release_refcount(&self, key: usize) {
-        drop(Box::from_raw(
-            self.refcounts.lock().unwrap().remove(key).as_ptr(),
-        ));
+        let refcount = self.refcounts.lock().unwrap().remove(key);
+
+        drop(unsafe { Box::from_raw(refcount.as_ptr()) });
     }
 
     #[inline]
@@ -112,7 +112,7 @@ impl<K, V, S> Handle<K, V, S> {
         if self.residual.fetch_sub(1, Ordering::AcqRel) == 1 {
             if self.writer_state.swap(WRITABLE, Ordering::AcqRel) == WAITING_ON_READERS {
                 self.writer_thread.with(|ptr| {
-                    (*ptr).as_ref().map(Thread::unpark);
+                    unsafe { &*ptr }.as_ref().map(Thread::unpark);
                 });
             }
         }
@@ -125,7 +125,7 @@ impl<K, V, S> Handle<K, V, S> {
             WRITABLE => (),
             NOT_WRITABLE => {
                 self.writer_thread
-                    .with_mut(|ptr| drop(ptr::replace(ptr, Some(thread::current()))));
+                    .with_mut(|ptr| drop(unsafe { ptr::replace(ptr, Some(thread::current())) }));
 
                 let exchange_result = self.writer_state.compare_exchange(
                     NOT_WRITABLE,
@@ -133,7 +133,7 @@ impl<K, V, S> Handle<K, V, S> {
                     Ordering::Release,
                     Ordering::Relaxed,
                 );
-                
+
                 debug_assert!(matches!(exchange_result, Ok(NOT_WRITABLE) | Err(WRITABLE)));
             }
             WAITING_ON_READERS => {
@@ -148,12 +148,12 @@ impl<K, V, S> Handle<K, V, S> {
                 {
                     abort()
                 }
-            },
+            }
             _ => {
                 // We never store any other value in this atomic, so this branch *really* should
                 // not be reachable
                 abort();
-            },
+            }
         };
 
         // Wait for the current write map to become available
@@ -161,7 +161,7 @@ impl<K, V, S> Handle<K, V, S> {
             thread::park();
         }
 
-        &*(self.maps.get(self.writer_map.get()) as *const _)
+        unsafe { &*(self.maps.get(self.writer_map.get()) as *const _) }
     }
 
     #[inline]
@@ -177,7 +177,7 @@ impl<K, V, S> Handle<K, V, S> {
 
         let residual = guard
             .iter()
-            .map(|(_, refcount)| refcount.as_ref().swap_maps())
+            .map(|(_, refcount)| unsafe { refcount.as_ref() }.swap_maps())
             .sum::<usize>();
 
         // This needs to be within the mutex

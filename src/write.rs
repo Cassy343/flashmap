@@ -52,13 +52,15 @@ where
                     map.insert_unique_unchecked(key, value);
                 }
                 Operation::Replace(key, value) => {
-                    let slot = map.get_mut(&key).unwrap_unchecked();
-                    Alias::drop(slot);
+                    let slot = unsafe { map.get_mut(&key).unwrap_unchecked() };
+                    unsafe {
+                        Alias::drop(slot);
+                    }
                     *slot = value;
                 }
-                Operation::Remove(key) => {
+                Operation::Remove(key) => unsafe {
                     Alias::drop(&mut map.remove(&key).unwrap_unchecked());
-                }
+                },
             }
         }
 
@@ -70,12 +72,12 @@ where
         for operation in self.operations.drain(..) {
             match operation {
                 Operation::InsertUnique(_key, _value) => (),
-                Operation::Replace(key, _value) => {
+                Operation::Replace(key, _value) => unsafe {
                     Alias::drop(map.get_mut(&key).unwrap_unchecked());
-                }
-                Operation::Remove(key) => {
+                },
+                Operation::Remove(key) => unsafe {
                     Alias::drop(map.get_mut(&key).unwrap_unchecked());
-                }
+                },
             }
         }
     }
@@ -110,22 +112,22 @@ where
     pub fn insert(&mut self, key: K, value: V) -> InsertionResult {
         let value = Alias::new(value);
 
-        self.map.with_mut(|ptr| unsafe {
-            match (&mut *ptr).raw_entry_mut().from_key(&key) {
+        self.map.with_mut(
+            |ptr| match unsafe { &mut *ptr }.raw_entry_mut().from_key(&key) {
                 RawEntryMut::Vacant(entry) => {
                     let key = Alias::new(key);
-                    entry.insert(Alias::copy(&key), Alias::copy(&value));
+                    entry.insert(unsafe { Alias::copy(&key) }, unsafe { Alias::copy(&value) });
                     self.handle
                         .operations
                         .push(Operation::InsertUnique(key, value));
                     InsertionResult::Inserted
                 }
                 RawEntryMut::Occupied(mut entry) => {
-                    *entry.get_mut() = value;
+                    *entry.get_mut() = unsafe { Alias::copy(&value) };
                     InsertionResult::ReplacedOccupier
                 }
-            }
-        })
+            },
+        )
     }
 
     #[inline]
