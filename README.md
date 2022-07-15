@@ -119,4 +119,36 @@ drop(read);
 
 # Performance
 
-TODO: compile some benchmarks
+Four performance charts are shown below. First is an almost read-only workload (2500 reads per
+1 write), and the second is a read-heavy workload (50 reads per 1 write).
+
+These benchmarks were performed on an AMD 9 Ryzen 5900X 12-core CPU (12 physical cores, 24 logical
+cores), which uses the x86-64 architecture. The read-heavy workload was measured using
+[`conc-map-bench`](https://github.com/xacrimon/conc-map-bench), and the almost read-only workload
+was measured by using that crate with a modified version of
+[`bustle`](https://crates.io/crates/bustle) in order to skew the read percentage above 99%.
+
+In the first case, we can see that throughput scales almost linearly up to the physical core count,
+and less so up to the logical core count. There seems to be a possibility of extreme latency spikes
+past the logical core count, but the cause of this has yet to be determined.
+
+In the second use-case, both `flashmap` and `evmap` suffer as concurrency increases. This is
+because they are single-writer maps, so in order for multiple threads to write concurrently the
+writer needs to be wrapped in a mutex. The limiting factor in the read-heavy case is actually the
+mutex, since writes are much more expensive when compared to reads. If you need to write to the map
+from multiple threads, you should benchmark your code to determine whether or not you fall into the
+first case or second case.
+
+<details><summary>See Almost Read-Only Charts</summary>
+
+![almost-read-only-throughput](https://github.com/Cassy343/flashmap/raw/master/bench-graphs/almost-read-only-throughput.png)
+![almost-read-only-latency](https://github.com/Cassy343/flashmap/raw/master/bench-graphs/almost-read-only-latency.png)
+
+</details>
+
+<details><summary>See Read-Heavy Charts</summary>
+
+![read-heavy-throughput](https://github.com/Cassy343/flashmap/raw/master/bench-graphs/read-heavy-throughput.png)
+![read-heavy-latency](https://github.com/Cassy343/flashmap/raw/master/bench-graphs/read-heavy-latency.png)
+
+</details>
