@@ -10,7 +10,7 @@ use crate::{
 
 /// A read handle for the map.
 ///
-/// This type allows for the creation of [`ReadGuard`s](crate::ReadGuard), which provide direct
+/// This type allows for the creation of [`ReadGuard`s](crate::ReadGuard), which provide immutable
 /// access to the underlying data.
 pub struct ReadHandle<K, V, S = RandomState> {
     inner: Arc<Handle<K, V, S>>,
