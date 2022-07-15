@@ -73,7 +73,7 @@ where
     /// let mut write_guard = write.guard();
     /// write_guard.insert(1, 42);
     /// write_guard.insert(2, 43);
-    /// drop(write_guard);
+    /// write_guard.publish();
     ///
     /// // Now new read guards will see those entries
     /// assert_eq!(read.guard().len(), 2);
@@ -143,7 +143,7 @@ where
     /// guard.insert(3, 5);
     /// guard.insert(5, 7);
     /// guard.insert(7, 11);
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// let mut result = 0i8;
     /// for (&key, &value) in read.guard().iter() {
@@ -174,7 +174,7 @@ where
     /// guard.insert(1, "one".to_owned());
     /// guard.insert(10, "ten".to_owned());
     /// guard.insert(100, "one hundred".to_owned());
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// let mut result = 0u32;
     /// for &key in read.guard().keys() {
@@ -204,7 +204,7 @@ where
     /// guard.insert("one".to_owned(), 1);
     /// guard.insert("ten".to_owned(), 10);
     /// guard.insert("one hundred".to_owned(), 100);
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// let mut result = 0u32;
     /// for &key in read.guard().values() {
@@ -352,10 +352,19 @@ where
     /// // to drop it when it is safe to do so
     /// guard.drop_lazily(leaked);
     ///
-    /// drop(guard);
+    /// guard.publish();
     /// ```
     #[inline]
     pub fn drop_lazily(&self, leaked: Leaked<V>) {
         self.guard.drop_lazily(leaked)
+    }
+
+    /// Consumes this view and its guard, publishing all previous changes to the map.
+    /// 
+    /// This has the same effect as dropping the view. Note that the changes will only be visible
+    /// through newly created read or write guards.
+    #[inline]
+    pub fn publish(self) {
+        self.guard.publish()
     }
 }

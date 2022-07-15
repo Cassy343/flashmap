@@ -81,8 +81,9 @@ where
     /// // Remove a value
     /// assert_eq!(&*guard.remove("apple".to_owned()).unwrap(), "red");
     ///
-    /// // Dropping a WriteGuard makes all previous changes visible to new readers
-    /// drop(guard);
+    /// // Publishing makes all previous changes visible to new readers. Dropping the
+    /// // guard has the same effect.
+    /// guard.publish();
     /// ```
     ///
     /// Unlike a read guard, when reading through a write guard, all changes will be immediately
@@ -169,7 +170,7 @@ where
     /// guard.insert(0xFF0000, "red".to_owned());
     /// guard.insert(0x00FF00, "green".to_owned());
     /// guard.insert(0x0000FF, "blue".to_owned());
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// // ~~ stuff happens ~~
     ///
@@ -177,7 +178,7 @@ where
     /// let colors = [0xFF0000, 0x00FF00, 0x0000FF].map(|hex| {
     ///     guard.remove(hex).map(Evicted::leak).unwrap()
     /// });
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// let [red, green, blue] = colors.map(write.reclaimer());
     ///
@@ -367,6 +368,12 @@ where
             unsafe { &mut *ops_ptr }.push(Operation::Drop(Leaked::into_inner(leaked)));
         });
     }
+
+    #[inline]
+    pub(crate) fn publish(self) {
+        // publishing logic happens on drop
+        drop(self);
+    }
 }
 
 impl<'guard, K, V, S> Drop for WriteGuard<'guard, K, V, S>
@@ -505,7 +512,7 @@ impl<'a, V> Evicted<'a, V> {
     /// let a = guard.remove(1).map(Evicted::leak).unwrap();
     /// let b = guard.remove(2).map(Evicted::leak).unwrap();
     ///
-    /// drop(guard);
+    /// guard.publish();
     ///
     /// // Reclaim one
     /// let a = write.reclaim_one(a);

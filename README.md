@@ -46,9 +46,9 @@ write_guard.insert("foo".to_owned(), "bar".to_owned());
 write_guard.insert("fizz".to_owned(), "buzz".to_owned());
 write_guard.insert("baz".to_owned(), "qux".to_owned());
 
-// Dropping the write guard publishes all previous changes, making them
-// visible to new readers
-drop(write_guard);
+// Publish all previous changes, making them visible to new readers. This has
+// the same effect as dropping the guard.
+write_guard.publish();
 
 // You must also create a guard from a read handle to read the map, but this
 // operation is cheap
@@ -89,7 +89,8 @@ write_guard.replace("baz".to_owned(), |old| {
     clone
 });
 
-drop(write_guard);
+// Make changes visible to new readers
+write_guard.publish();
 
 // Since the read guard was created before the write was published, it will
 // see the old version of the map
