@@ -26,13 +26,13 @@ acceptable. Good use-cases include:
   occasional insertion/removal
 - High frequency reads with another thread executing a moderate write workload
 
-Situations when **not** to use `flashamp` include:
+Situations when **not** to use `flashmap` include:
 - Frequent, small writes which cannot be batched
 - Concurrent write access from multiple threads
 
 # Examples
 
-```
+```rust
 use flashmap;
 
 // Create a new map; this function returns a write handle and a read handle
@@ -138,6 +138,9 @@ writer needs to be wrapped in a mutex. The limiting factor in the read-heavy cas
 mutex, since writes are much more expensive when compared to reads. If you need to write to the map
 from multiple threads, you should benchmark your code to determine whether or not you fall into the
 first case or second case.
+
+Click the text that says "See ... Charts" to see the charts. You can click the text again to
+collapse the charts as well.
 
 <details><summary>See Almost Read-Only Charts</summary>
 

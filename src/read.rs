@@ -121,7 +121,8 @@ impl<K, V, S> Drop for ReadHandle<K, V, S> {
 ///
 /// This guard provides a snapshot view of the map at a particular point in time. A new guard must
 /// be created in order to see updates from the writer. See
-/// [`ReadHandle::guard`](crate::ReadHandle::guard) for examples.
+/// [`ReadHandle::guard`](crate::ReadHandle::guard) for examples. See [`View`](crate::View) for
+/// additional examples and the public API to interact with the underlying map.
 pub struct ReadGuard<'guard, K, V, S> {
     handle: &'guard ReadHandle<K, V, S>,
     map: &'guard UnsafeCell<Map<K, V, S>>,

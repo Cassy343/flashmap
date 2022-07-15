@@ -13,8 +13,8 @@ use crate::{
     core::Handle,
     loom::cell::UnsafeCell,
     loom::sync::Arc,
-    view::sealed::ReadAccess,
     util::{Alias, BorrowHelper},
+    view::sealed::ReadAccess,
     Map, View,
 };
 
@@ -56,7 +56,8 @@ where
     /// If all readers already see the same version of the map (or if there are no active readers)
     /// then this function is a no-op.
     ///
-    /// TODO
+    /// This function is meant for advanced use only. See
+    /// `Leaked::`[`into_inner`](crate::Leaked::into_inner) for an example use-case.
     #[inline]
     pub fn synchronize(&self) {
         self.inner.synchronize();
@@ -252,6 +253,9 @@ where
 
 /// Provides mutable access to the underlying map, and publishes all changes to new readers when
 /// dropped.
+/// 
+/// See [`WriteHandle::guard`](crate::WriteHandle::guard) for examples. See [`View`](crate::View)
+/// for additional examples and the public API to interact with the underlying map.
 pub struct WriteGuard<'guard, K: Eq + Hash, V, S: BuildHasher> {
     map: &'guard UnsafeCell<Map<K, V, S>>,
     handle: &'guard WriteHandle<K, V, S>,
