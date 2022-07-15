@@ -32,14 +32,14 @@ impl RefCount {
 
     #[inline]
     fn to_map_index(value: usize) -> MapIndex {
-        unsafe { MapIndex::from_usize(value >> (usize::BITS - 1)).unwrap_unchecked() }
+        unsafe { MapIndex::from_usize_unchecked(value >> (usize::BITS - 1)) }
     }
 
     #[inline]
     pub(super) fn increment(&self) -> MapIndex {
-        let old = self.value.fetch_add(1, Ordering::Acquire);
-        Self::check_overflow(old);
-        Self::to_map_index(old)
+        let old_value = self.value.fetch_add(1, Ordering::Acquire);
+        Self::check_overflow(old_value);
+        Self::to_map_index(old_value)
     }
 
     #[inline]

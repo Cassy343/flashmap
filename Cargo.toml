@@ -1,11 +1,11 @@
 [package]
 name = "flashmap"
 version = "0.0.1-alpha"
-authors = ["Cassy343", "maddymakesgames"]
+authors = ["Cassy343"]
 edition = "2021"
 
 description = "A lock-free eventually consistent concurrent hash map."
-repository = "https://github.com/Rusty-Quartz/quartz_nbt"
+repository = "https://github.com/Cassy343/flashmap"
 license = "MIT"
 readme = "README.md"
 
@@ -13,7 +13,7 @@ keywords = ["map", "concurrent", "hashamp"]
 categories = ["concurrency", "data-structures"]
 
 [dependencies]
-num_cpus = "1.13.1"
+num_cpus = "1"
 slab = "0.4.6"
 
 [dependencies.hashbrown]
@@ -28,3 +28,12 @@ loom = { version = "0.5.6", features = ["checkpoint"] }
 inherits = "release"
 debug = 2
 debug-assertions = true
+lto = "fat"
+codegen-units = 1
+
+[profile.loomtest-fast]
+inherits = "loomtest"
+debug = 0
+debug-assertions = false
+strip = "symbols"
+panic = "abort"

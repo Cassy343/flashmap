@@ -1,7 +1,7 @@
 use crate::loom::cell::UnsafeCell;
 use crate::util::CachePadded;
 use crate::Map;
-use std::ptr::NonNull;
+use std::{mem, ptr::NonNull};
 
 #[repr(usize)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -12,12 +12,9 @@ pub enum MapIndex {
 
 impl MapIndex {
     #[inline]
-    pub fn from_usize(index: usize) -> Option<MapIndex> {
-        match index {
-            0 => Some(Self::First),
-            1 => Some(Self::Second),
-            _ => None,
-        }
+    pub unsafe fn from_usize_unchecked(index: usize) -> MapIndex {
+        // For some reason the LLVM is dumb and doing a match here produces shitty asm
+        unsafe { mem::transmute(index) }
     }
 
     #[inline]

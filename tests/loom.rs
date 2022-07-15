@@ -1,7 +1,7 @@
 mod util;
 
-use flashmap::{ReadHandle, RemovalResult};
-use util::thread;
+use flashmap::{Evicted, ReadHandle};
+use util::{thread, TrackAccess};
 
 trait BoolExt {
     fn implies(self, other: Self) -> Self;
@@ -16,20 +16,20 @@ impl BoolExt for bool {
 #[test]
 pub fn only_readers() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<String, String>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
         let mut guard = write.guard();
-        guard.insert("a".to_owned(), "foo".to_owned());
-        guard.insert("b".to_owned(), "fizzbuzz".to_owned());
-        guard.insert("c".to_owned(), "Hello, world!".to_owned());
+        guard.insert(TrackAccess::new(1), TrackAccess::new(3));
+        guard.insert(TrackAccess::new(2), TrackAccess::new(8));
+        guard.insert(TrackAccess::new(3), TrackAccess::new(13));
         drop(guard);
         drop(write);
 
-        fn test_read(read: ReadHandle<String, String>) {
+        fn test_read(read: ReadHandle<TrackAccess<u32>, TrackAccess<u32>>) {
             let guard = read.guard();
-            let result = guard.get("c").unwrap().len()
-                - guard.get("a").unwrap().len()
-                - guard.get("b").unwrap().len();
+            let result = *guard.get(&3).unwrap().get()
+                - *guard.get(&1).unwrap().get()
+                - *guard.get(&2).unwrap().get();
             drop(guard);
             assert_eq!(result, 2);
         }
@@ -46,14 +46,16 @@ pub fn only_readers() {
 #[test]
 pub fn reader_and_writer() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
         let t1 = thread::spawn(move || {
-            write.guard().insert(10, Box::new(20));
+            write
+                .guard()
+                .insert(TrackAccess::new(10), TrackAccess::new(20));
         });
 
         let t2 = thread::spawn(move || {
-            let res = read.guard().get(&10).map(|x| **x);
+            let res = read.guard().get(&10).map(|x| *x.get());
             assert!(matches!(res, Some(20) | None));
             read
         });
@@ -61,24 +63,28 @@ pub fn reader_and_writer() {
         t1.join().unwrap();
         let read = t2.join().unwrap();
 
-        assert_eq!(read.guard().get(&10).map(|x| **x).unwrap(), 20);
+        assert_eq!(read.guard().get(&10).map(|x| *x.get()).unwrap(), 20);
     });
 }
 
 #[test]
 pub fn many_writes() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
         let t1 = thread::spawn(move || {
-            write.guard().insert(10, Box::new(20));
-            write.guard().insert(20, Box::new(40));
+            write
+                .guard()
+                .insert(TrackAccess::new(10), TrackAccess::new(20));
+            write
+                .guard()
+                .insert(TrackAccess::new(20), TrackAccess::new(40));
         });
 
         let t2 = thread::spawn(move || {
-            let x = read.guard().get(&20).map(|x| **x);
+            let x = read.guard().get(&20).map(|x| *x.get());
             assert!(matches!(x, Some(40) | None));
-            let y = read.guard().get(&10).map(|x| **x);
+            let y = read.guard().get(&10).map(|x| *x.get());
             assert!(matches!(y, Some(20) | None));
             assert!(x.is_some().implies(y.is_some()));
         });
@@ -91,23 +97,30 @@ pub fn many_writes() {
 #[test]
 pub fn many_different_writes() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
-        write.guard().insert(10, Box::new(20));
+        write
+            .guard()
+            .insert(TrackAccess::new(10), TrackAccess::new(20));
 
         let t1 = thread::spawn(move || {
-            write.guard().insert(20, Box::new(40));
+            write
+                .guard()
+                .insert(TrackAccess::new(20), TrackAccess::new(40));
 
-            assert!(write.guard().rcu(20, |x| Box::new(**x + 5)));
+            assert!(write
+                .guard()
+                .replace(TrackAccess::new(20), |x| TrackAccess::new(*x.get() + 5))
+                .is_some());
 
-            assert_eq!(write.guard().remove(10), RemovalResult::Removed);
+            assert!(write.guard().remove(TrackAccess::new(10)).is_some());
         });
 
         let t2 = thread::spawn(move || {
-            let x = read.guard().get(&10).map(|x| **x);
+            let x = read.guard().get(&10).map(|x| *x.get());
             assert!(matches!(x, Some(20) | None));
 
-            let y = read.guard().get(&20).map(|x| **x);
+            let y = read.guard().get(&20).map(|x| *x.get());
             assert!(matches!(y, Some(40) | Some(45) | None));
 
             assert!(matches!(y, Some(40) | None).implies(x.is_some()));
@@ -122,28 +135,32 @@ pub fn many_different_writes() {
 #[test]
 pub fn complex_read_many_writes() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
         let t1 = thread::spawn(move || {
-            write.guard().insert(10, Box::new(20));
-            write.guard().insert(20, Box::new(40));
+            write
+                .guard()
+                .insert(TrackAccess::new(10), TrackAccess::new(20));
+            write
+                .guard()
+                .insert(TrackAccess::new(20), TrackAccess::new(40));
         });
 
         let t2 = thread::spawn(move || {
             let guard1 = read.guard();
 
-            let x = guard1.get(&20).map(|x| **x);
+            let x = guard1.get(&20).map(|x| *x.get());
             assert!(matches!(x, Some(40) | None));
 
             let guard2 = read.guard();
 
-            let y = guard2.get(&10).map(|x| **x);
+            let y = guard2.get(&10).map(|x| *x.get());
             assert!(matches!(y, Some(20) | None));
             assert!(x.is_some().implies(y.is_some()));
 
             drop(guard2);
 
-            assert!(matches!(guard1.get(&20).map(|x| **x), Some(40) | None));
+            assert!(matches!(guard1.get(&20).map(|x| *x.get()), Some(40) | None));
 
             drop(guard1);
         });
@@ -156,10 +173,12 @@ pub fn complex_read_many_writes() {
 #[test]
 pub fn many_handles() {
     util::maybe_loom_model(|| {
-        let (mut write, read) = flashmap::new::<u32, Box<u32>>();
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
 
         let t1 = thread::spawn(move || {
-            write.guard().insert(10, Box::new(20));
+            write
+                .guard()
+                .insert(TrackAccess::new(10), TrackAccess::new(20));
             write
         });
 
@@ -169,12 +188,12 @@ pub fn many_handles() {
             let read2 = read.clone();
             let guard2 = read2.guard();
 
-            let x = guard1.get(&20).map(|x| **x);
+            let x = guard1.get(&20).map(|x| *x.get());
             assert!(matches!(x, Some(40) | None));
             drop(guard1);
             drop(read);
 
-            let y = guard2.get(&10).map(|x| **x);
+            let y = guard2.get(&10).map(|x| *x.get());
             assert!(matches!(y, Some(20) | None));
             assert!(x.is_some().implies(y.is_some()));
             drop(guard2);
@@ -182,13 +201,65 @@ pub fn many_handles() {
         });
 
         let mut write = t1.join().unwrap();
-        write.guard().insert(20, Box::new(40));
+        write
+            .guard()
+            .insert(TrackAccess::new(20), TrackAccess::new(40));
         drop(write);
 
         t2.join().unwrap();
     });
 }
 
+#[test]
+pub fn evicted_and_leaked_values() {
+    util::maybe_loom_model(|| {
+        let (mut write, read) = flashmap::new::<TrackAccess<u32>, TrackAccess<u32>>();
+
+        let mut guard = write.guard();
+        guard.insert(TrackAccess::new(10), TrackAccess::new(20));
+        guard.insert(TrackAccess::new(20), TrackAccess::new(40));
+        guard.insert(TrackAccess::new(40), TrackAccess::new(80));
+        drop(guard);
+
+        let t1 = thread::spawn(move || {
+            let mut guard = write.guard();
+            let twenty = guard.remove(TrackAccess::new(10)).unwrap();
+            let forty = guard
+                .replace(TrackAccess::new(20), |val| TrackAccess::new(val.get() + 5))
+                .unwrap();
+            let twenty = Evicted::leak(twenty);
+            assert_eq!(*forty.get(), 40);
+            let eighty = guard
+                .insert(TrackAccess::new(40), TrackAccess::new(90))
+                .map(Evicted::leak)
+                .unwrap();
+            drop(guard);
+
+            let mut twenty = write.reclaim_one(twenty);
+            assert_eq!(*twenty.get_mut(), 20);
+            assert_eq!(*eighty.get(), 80);
+
+            write.guard().drop_lazily(eighty);
+        });
+
+        let t2 = thread::spawn(move || {
+            let twenty = read.guard().get(&10).map(|x| *x.get());
+            let forty = read.guard().get(&20).map(|x| *x.get());
+            let eighty = read.guard().get(&40).map(|x| *x.get());
+
+            assert!(twenty
+                .is_none()
+                .implies(forty == Some(45) && eighty == Some(90)));
+            assert!((forty == Some(45)).implies(eighty == Some(90)));
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+    });
+}
+
+// WARNING: this test takes about 20 minutes to run on my AMD 9 Ryzen 5900X with the
+// loomtest-fast profile
 #[test]
 #[cfg(long_test)]
 pub fn many_reads_many_writes() {

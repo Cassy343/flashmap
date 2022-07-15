@@ -1,19 +1,17 @@
-use std::{
-    borrow::Borrow,
-    collections::hash_map::RandomState,
-    hash::{BuildHasher, Hash},
-    ops::Deref,
-    ptr::NonNull,
-};
+use std::{collections::hash_map::RandomState, ptr::NonNull};
 
 use crate::{
     core::{Handle, MapAccess, MapIndex, ReaderStatus, RefCount},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
-    util::Alias,
-    Map,
+    view::sealed::ReadAccess,
+    Map, View,
 };
 
+/// A read handle for the map.
+///
+/// This type allows for the creation of [`ReadGuard`s](crate::ReadGuard), which provide direct
+/// access to the underlying data.
 pub struct ReadHandle<K, V, S = RandomState> {
     inner: Arc<Handle<K, V, S>>,
     map_access: MapAccess<K, V, S>,
@@ -21,7 +19,20 @@ pub struct ReadHandle<K, V, S = RandomState> {
     refcount_key: usize,
 }
 
-unsafe impl<K, V, S> Send for ReadHandle<K, V, S> where Arc<Map<K, V, S>>: Send {}
+unsafe impl<K, V, S> Send for ReadHandle<K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Send + Sync,
+{
+}
+unsafe impl<K, V, S> Sync for ReadHandle<K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Send + Sync,
+{
+}
 
 impl<K, V, S> ReadHandle<K, V, S> {
     pub(crate) fn new(
@@ -38,15 +49,57 @@ impl<K, V, S> ReadHandle<K, V, S> {
         }
     }
 
+    /// Creates a new [`ReadGuard`](crate::ReadGuard) wrapped in a [`View`](crate::View), allowing
+    /// safe access to the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use flashmap;
+    /// let (write, read) = flashmap::new::<u32, u32>();
+    ///
+    /// let guard = read.guard();
+    ///
+    /// // The map should be empty since we added nothing to it.
+    /// assert!(guard.is_empty());
+    ///
+    /// // Maybe do some more work with the guard
+    ///
+    /// // The guard is released when dropped (you don't have to drop it explicitly)
+    /// drop(guard);
+    /// ```
+    ///
+    /// In order to see the most recent updates from the writer, a new guard needs to be created:
+    /// ```
+    /// # use flashmap;
+    /// let (mut write, read) = flashmap::new::<String, String>();
+    ///
+    /// let guard = read.guard();
+    ///
+    /// // This key is not in the map yet
+    /// assert!(!guard.contains_key("ferris"));
+    ///
+    /// write.guard().insert("ferris".to_owned(), "crab".to_owned());
+    ///
+    /// // Since we're still using the same guard, the write isn't visible to us yet
+    /// assert!(!guard.contains_key("ferris"));
+    ///
+    /// // Drop the old guard and get a new one
+    /// drop(guard);
+    /// let guard = read.guard();
+    ///
+    /// // The write is now visible
+    /// assert_eq!(guard.get("ferris").unwrap(), "crab");
+    /// ```
     #[inline]
-    pub fn guard(&self) -> ReadGuard<'_, K, V, S> {
+    pub fn guard(&self) -> View<ReadGuard<'_, K, V, S>> {
         let map_index = unsafe { Handle::<K, V, S>::start_read(self.refcount.as_ref()) };
 
-        ReadGuard {
+        View::new(ReadGuard {
             handle: self,
             map: unsafe { self.map_access.get(map_index) },
             map_index,
-        }
+        })
     }
 }
 
@@ -64,60 +117,44 @@ impl<K, V, S> Drop for ReadHandle<K, V, S> {
     }
 }
 
-pub struct ReadGuard<'a, K, V, S> {
-    handle: &'a ReadHandle<K, V, S>,
-    map: &'a UnsafeCell<Map<K, V, S>>,
+/// Provides immutable access to the map, and prevents entries from being dropped.
+///
+/// This guard provides a snapshot view of the map at a particular point in time. A new guard must
+/// be created in order to see updates from the writer. See
+/// [`ReadHandle::guard`](crate::ReadHandle::guard) for examples.
+pub struct ReadGuard<'guard, K, V, S> {
+    handle: &'guard ReadHandle<K, V, S>,
+    map: &'guard UnsafeCell<Map<K, V, S>>,
     map_index: MapIndex,
 }
 
-impl<'a, K, V, S: BuildHasher> ReadGuard<'a, K, V, S> {
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.map.with(|ptr| unsafe { (&*ptr).len() })
-    }
+unsafe impl<K, V, S> Send for ReadGuard<'_, K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Send + Sync,
+{
+}
+unsafe impl<K, V, S> Sync for ReadGuard<'_, K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Send + Sync,
+{
+}
 
-    #[inline]
-    pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
+impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
+    type Map = Map<K, V, S>;
+
+    fn with_map<'read, F, R>(&'read self, op: F) -> R
     where
-        Alias<K>: Borrow<Q> + Eq + Hash,
-        Q: Hash + Eq,
+        F: FnOnce(&'read Self::Map) -> R,
     {
-        self.map.with(|ptr| unsafe { &*ptr }.contains_key(key))
-    }
-
-    #[inline]
-    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
-    where
-        Alias<K>: Borrow<Q> + Eq + Hash,
-        Q: Hash + Eq,
-    {
-        self.map
-            .with(|ptr| unsafe { &*ptr }.get(key).map(|value| &**value))
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        self.map.with(|ptr| {
-            unsafe { &*ptr }
-                .iter()
-                .map(|(key, value)| (&**key, &**value))
-        })
-    }
-
-    #[inline]
-    pub fn keys(&self) -> impl Iterator<Item = &K> {
-        self.map
-            .with(|ptr| unsafe { &*ptr }.keys().map(Deref::deref))
-    }
-
-    #[inline]
-    pub fn values(&self) -> impl Iterator<Item = &V> {
-        self.map
-            .with(|ptr| unsafe { &*ptr }.values().map(Deref::deref))
+        self.map.with(|ptr| op(unsafe { &*ptr }))
     }
 }
 
-impl<'a, K, V, S> Drop for ReadGuard<'a, K, V, S> {
+impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S> {
     fn drop(&mut self) {
         let refcount = unsafe { self.handle.refcount.as_ref() };
         if Handle::<K, V, S>::finish_read(refcount, self.map_index) == ReaderStatus::Residual {

@@ -1,15 +1,18 @@
 #![deny(rust_2018_idioms, unsafe_op_in_unsafe_fn)]
-#![warn(missing_docs, missing_debug_implementations)]
+#![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+pub mod algorithm;
 mod core;
 mod read;
 mod util;
+mod view;
 mod write;
 
 pub use read::*;
 pub(crate) use util::loom;
 pub use util::Alias;
+pub use view::View;
 pub use write::*;
 
 use std::{
@@ -20,6 +23,10 @@ use std::{
 
 pub(crate) type Map<K, V, S = RandomState> = hashbrown::HashMap<Alias<K>, Alias<V>, S>;
 
+/// Creates a new map with a [`RandomState`](std::collections::hash_map::RandomState) hasher.
+///
+/// If you wish to specify additional parameters, see [`with_capacity`](crate::with_capacity),
+/// [`with_hasher`](crate::with_hasher), and [`Builder`](crate::Builder).
 pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where
     K: Eq + Hash,
@@ -27,6 +34,10 @@ where
     Builder::new().build()
 }
 
+/// Creates a new map with the specified initial capacity and a
+/// [`RandomState`](std::collections::hash_map::RandomState) hasher.
+///
+/// If you wish to specify additional parameters, see [`Builder`](crate::Builder).
 pub fn with_capacity<K, V>(capacity: usize) -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where
     K: Eq + Hash,
@@ -34,6 +45,9 @@ where
     Builder::new().with_capacity(capacity).build()
 }
 
+/// Creates a new map with the specified hasher.
+///
+/// If you wish to specify additional parameters, see [`Builder`](crate::Builder).
 pub fn with_hasher<K, V, S>(hasher: S) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
 where
     K: Eq + Hash,
@@ -42,6 +56,10 @@ where
     Builder::new().with_hasher(hasher).build()
 }
 
+/// A builder for a map.
+///
+/// This builder allows you to specify an initial capacity and a hasher, and provides more
+/// flexibility in how that hasher can be constructed.
 #[derive(Clone, Copy)]
 pub struct Builder<S = RandomState> {
     capacity: usize,
@@ -58,10 +76,12 @@ impl<S> Debug for Builder<S> {
 }
 
 impl Builder<RandomState> {
+    /// Creates a new builder with a [`RandomState`](std::collections::hash_map::RandomState)
+    /// hasher.
     pub fn new() -> Self {
         Self {
             capacity: 0,
-            hasher: HasherGen::MakeAndClone(|| {
+            hasher: HasherGen::MakeBoth(|| {
                 let hasher = RandomState::default();
                 (hasher.clone(), hasher)
             }),
@@ -70,6 +90,7 @@ impl Builder<RandomState> {
 }
 
 impl<S> Builder<S> {
+    /// Sets the initial capacity of the map. If not specified, the default is 0.
     pub fn with_capacity(self, capacity: usize) -> Self {
         Self {
             capacity,
@@ -77,6 +98,8 @@ impl<S> Builder<S> {
         }
     }
 
+    /// Sets the hasher for the underlying map. The provided hasher must implement `Clone` due to
+    /// the implementation details of this crate.
     pub fn with_hasher<H>(self, hasher: H) -> Builder<H>
     where
         H: Clone + BuildHasher,
@@ -87,16 +110,34 @@ impl<S> Builder<S> {
         }
     }
 
+    /// Sets the hasher for the underlying map. Similar to
+    /// [`with_hasher`](crate::Builder::with_hasher), but instead of using a concrete hasher
+    /// builder, the provided function will be called as many times as necessary to initialize
+    /// the underlying map.
     pub fn with_hasher_fn<H>(self, make: fn() -> H) -> Builder<H>
     where
         H: BuildHasher,
     {
         Builder {
             capacity: self.capacity,
-            hasher: HasherGen::Make(make),
+            hasher: HasherGen::MakeOne(make),
         }
     }
 
+    /// Consumes the builder and returns a write handle and read handle to the map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use flashmap::Builder;
+    /// // Use type inference to determine the key and value types
+    /// let (mut write, read) = Builder::new().build();
+    ///
+    /// write.guard().insert(10u32, 20u32);
+    ///
+    /// // Or specify them explicitly
+    /// let (write, read) = Builder::new().build::<String, String>();
+    /// ```
     pub fn build<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
     where
         K: Eq + Hash,
@@ -105,25 +146,35 @@ impl<S> Builder<S> {
         core::Handle::new(self)
     }
 
-    pub(crate) fn into_args(self) -> (usize, S, S) {
+    pub(crate) fn into_args(self) -> BuilderArgs<S> {
         let (h1, h2) = self.hasher.generate();
-        (self.capacity, h1, h2)
+        BuilderArgs {
+            capacity: self.capacity,
+            h1,
+            h2,
+        }
     }
 }
 
 #[derive(Clone, Copy)]
 enum HasherGen<S> {
-    Make(fn() -> S),
+    MakeOne(fn() -> S),
+    MakeBoth(fn() -> (S, S)),
     Clone(S, fn(&S) -> S),
-    MakeAndClone(fn() -> (S, S)),
 }
 
 impl<S> HasherGen<S> {
     fn generate(self) -> (S, S) {
         match self {
-            Self::Make(make) => (make(), make()),
+            Self::MakeOne(make) => (make(), make()),
+            Self::MakeBoth(make_both) => make_both(),
             Self::Clone(hasher, clone) => (clone(&hasher), hasher),
-            Self::MakeAndClone(make_and_clone) => make_and_clone(),
         }
     }
+}
+
+pub(crate) struct BuilderArgs<S> {
+    pub capacity: usize,
+    pub h1: S,
+    pub h2: S,
 }
