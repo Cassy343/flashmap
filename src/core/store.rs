@@ -1,7 +1,7 @@
 use crate::loom::cell::UnsafeCell;
 use crate::util::CachePadded;
 use crate::Map;
-use std::{mem, ptr::NonNull, marker::PhantomData};
+use std::{marker::PhantomData, mem, ptr::NonNull};
 
 #[repr(usize)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
