@@ -1,10 +1,10 @@
 use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
-    marker::PhantomData,
     mem,
+    num::NonZeroUsize,
     ops::Deref,
-    ptr,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use hashbrown::hash_map::RawEntryMut;
@@ -18,6 +18,19 @@ use crate::{
     Map, View,
 };
 
+static NEXT_WRITER_UID: AtomicUsize = AtomicUsize::new(1);
+
+#[repr(transparent)]
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct WriterUid(NonZeroUsize);
+
+impl WriterUid {
+    #[inline]
+    fn next() -> Self {
+        Self(NonZeroUsize::new(NEXT_WRITER_UID.fetch_add(1, Ordering::Relaxed)).unwrap())
+    }
+}
+
 /// A write handle to the underlying map.
 ///
 /// This type allows for the creation of [`WriteGuard`s](crate::WriteGuard) which allow for
@@ -29,6 +42,7 @@ where
 {
     inner: Arc<Handle<K, V, S>>,
     operations: UnsafeCell<Vec<Operation<K, V>>>,
+    uid: WriterUid,
 }
 
 unsafe impl<K, V, S> Send for WriteHandle<K, V, S>
@@ -48,6 +62,7 @@ where
         Self {
             inner,
             operations: UnsafeCell::new(Vec::new()),
+            uid: WriterUid::next(),
         }
     }
 
@@ -118,7 +133,11 @@ where
             });
         });
 
-        View::new(WriteGuard { map, handle: self })
+        View::new(WriteGuard {
+            map,
+            handle: self,
+            handle_uid: self.uid,
+        })
     }
 
     /// Reclaims a leaked value, providing ownership of the underlying value.
@@ -189,9 +208,12 @@ where
     #[inline]
     pub fn reclaimer(&self) -> impl Fn(Leaked<V>) -> V + '_ {
         self.synchronize();
-        let source_map = &*self.inner;
+        let uid = self.uid;
         move |leaked| {
-            assert!(ptr::eq(source_map, leaked.source_map.cast()));
+            assert!(
+                uid == leaked.handle_uid,
+                "Leaked value is not from this map"
+            );
             unsafe { Alias::into_owned(leaked.value) }
         }
     }
@@ -201,36 +223,35 @@ where
         // We do unchecked ops in here since this function benches pretty hot when doing a lot
         // of writing
 
-        for mut operation in operations.drain(..) {
+        for Operation {
+            raw: mut operation,
+            leaky,
+        } in operations.drain(..)
+        {
             match operation {
-                Operation::InsertUnique(key, value) => {
+                RawOperation::InsertUnique(key, value) => {
                     map.insert_unique_unchecked(key, value);
                 }
-                Operation::Replace(ref key, value) => {
+                RawOperation::Replace(ref key, value) => {
                     let slot =
                         unsafe { map.get_mut(BorrowHelper::new_ref(key)).unwrap_unchecked() };
-                    unsafe {
-                        Alias::drop(slot);
+                    if !leaky {
+                        unsafe {
+                            Alias::drop(slot);
+                        }
                     }
                     *slot = value;
                 }
-                Operation::ReplaceLeaky(ref key, value) => unsafe {
-                    *map.get_mut(BorrowHelper::new_ref(key)).unwrap_unchecked() = value;
-                },
-                Operation::Remove(ref key) => unsafe {
+                RawOperation::Remove(ref key) => unsafe {
                     let (mut k, mut v) = map
                         .remove_entry(BorrowHelper::new_ref(key))
                         .unwrap_unchecked();
                     Alias::drop(&mut k);
-                    Alias::drop(&mut v);
+                    if !leaky {
+                        Alias::drop(&mut v);
+                    }
                 },
-                Operation::RemoveLeaky(ref key) => unsafe {
-                    let (mut k, _v) = map
-                        .remove_entry(BorrowHelper::new_ref(key))
-                        .unwrap_unchecked();
-                    Alias::drop(&mut k);
-                },
-                Operation::Drop(ref mut value) => unsafe { Alias::drop(value) },
+                RawOperation::Drop(ref mut value) => unsafe { Alias::drop(value) },
             }
         }
     }
@@ -254,12 +275,13 @@ where
 
 /// Provides mutable access to the underlying map, and publishes all changes to new readers when
 /// dropped.
-/// 
+///
 /// See [`WriteHandle::guard`](crate::WriteHandle::guard) for examples. See [`View`](crate::View)
 /// for additional examples and the public API to interact with the underlying map.
 pub struct WriteGuard<'guard, K: Eq + Hash, V, S: BuildHasher> {
     map: &'guard UnsafeCell<Map<K, V, S>>,
     handle: &'guard WriteHandle<K, V, S>,
+    handle_uid: WriterUid,
 }
 
 impl<'guard, K, V, S> ReadAccess for WriteGuard<'guard, K, V, S>
@@ -295,7 +317,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn insert<'ret>(&mut self, key: K, value: V) -> Option<Evicted<'ret, V>>
+    pub(crate) fn insert<'ret>(&mut self, key: K, value: V) -> Option<Evicted<'ret, K, V>>
     where
         'guard: 'ret,
     {
@@ -306,12 +328,12 @@ where
                 RawEntryMut::Vacant(entry) => {
                     let key = Alias::new(key);
                     entry.insert(unsafe { Alias::copy(&key) }, unsafe { Alias::copy(&value) });
-                    operations.push(Operation::InsertUnique(key, value));
+                    operations.push(Operation::new(RawOperation::InsertUnique(key, value)));
                     None
                 }
                 RawEntryMut::Occupied(mut entry) => {
                     let old = mem::replace(entry.get_mut(), unsafe { Alias::copy(&value) });
-                    operations.push(Operation::Replace(key, value));
+                    operations.push(Operation::new(RawOperation::Replace(key, value)));
                     Some(old)
                 }
             }
@@ -321,7 +343,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn replace<'ret, F>(&mut self, key: K, op: F) -> Option<Evicted<'ret, V>>
+    pub(crate) fn replace<'ret, F>(&mut self, key: K, op: F) -> Option<Evicted<'ret, K, V>>
     where
         F: FnOnce(&V) -> V,
         'guard: 'ret,
@@ -331,8 +353,9 @@ where
                 |map, operations| match map.get_mut(BorrowHelper::new_ref(&key)) {
                     Some(value) => {
                         let new_value = Alias::new(op(&**value));
-                        operations
-                            .push(Operation::Replace(key, unsafe { Alias::copy(&new_value) }));
+                        operations.push(Operation::new(RawOperation::Replace(key, unsafe {
+                            Alias::copy(&new_value)
+                        })));
                         let old_value = mem::replace(value, new_value);
                         Some(old_value)
                     }
@@ -344,7 +367,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove<'ret>(&mut self, key: K) -> Option<Evicted<'ret, V>>
+    pub(crate) fn remove<'ret>(&mut self, key: K) -> Option<Evicted<'ret, K, V>>
     where
         'guard: 'ret,
     {
@@ -352,7 +375,7 @@ where
             let removed = map.remove(BorrowHelper::new_ref(&key));
 
             if removed.is_some() {
-                operations.push(Operation::Remove(key));
+                operations.push(Operation::new(RawOperation::Remove(key)));
             }
 
             removed
@@ -363,9 +386,14 @@ where
 
     #[inline]
     pub(crate) fn drop_lazily(&self, leaked: Leaked<V>) {
-        assert!(ptr::eq(&*self.handle.inner, leaked.source_map.cast()));
+        assert!(
+            self.handle_uid == leaked.handle_uid,
+            "Leaked value is not from this map"
+        );
         self.handle.operations.with_mut(|ops_ptr| {
-            unsafe { &mut *ops_ptr }.push(Operation::Drop(Leaked::into_inner(leaked)));
+            unsafe { &mut *ops_ptr }.push(Operation::new(RawOperation::Drop(Leaked::into_inner(
+                leaked,
+            ))));
         });
     }
 
@@ -386,27 +414,28 @@ where
     }
 }
 
-enum Operation<K, V> {
-    InsertUnique(Alias<K>, Alias<V>),
-    Replace(K, Alias<V>),
-    ReplaceLeaky(K, Alias<V>),
-    Remove(K),
-    RemoveLeaky(K),
-    Drop(Alias<V>),
+struct Operation<K, V> {
+    raw: RawOperation<K, V>,
+    leaky: bool,
 }
 
 impl<K, V> Operation<K, V> {
-    fn make_leaky(&mut self) {
-        let old = unsafe { ptr::read(self) };
-        let new = match old {
-            Self::Replace(key, value) => Self::ReplaceLeaky(key, value),
-            Self::Remove(key) => Self::RemoveLeaky(key),
-            op => op,
-        };
-        unsafe {
-            ptr::write(self, new);
-        }
+    #[inline]
+    fn new(raw: RawOperation<K, V>) -> Self {
+        Self { raw, leaky: false }
     }
+
+    #[inline]
+    fn make_leaky(&mut self) {
+        self.leaky = true;
+    }
+}
+
+enum RawOperation<K, V> {
+    InsertUnique(Alias<K>, Alias<V>),
+    Replace(K, Alias<V>),
+    Remove(K),
+    Drop(Alias<V>),
 }
 
 /// A value which was evicted from a map.
@@ -435,7 +464,7 @@ impl<K, V> Operation<K, V> {
 /// guard.insert(0, 0);
 ///
 /// // Evict the entry and its value
-/// let removed: Evicted<'_, u32> = guard.remove(0).unwrap();
+/// let removed: Evicted<'_, u32, u32> = guard.remove(0).unwrap();
 ///
 /// // Inspect the evicted value by dereferencing it
 /// assert_eq!(*removed, 0);
@@ -446,43 +475,28 @@ impl<K, V> Operation<K, V> {
 /// To use an evicted value beyond the lifetime of the guard which provides it, you must leak the
 /// value. This also means that you're responsible for manually dropping it. See
 /// [`leak`](crate::Evicted::leak) and [`Leaked`](crate::Leaked) for more information.
-pub struct Evicted<'a, V> {
+pub struct Evicted<'a, K, V> {
     value: Alias<V>,
-    // We do this ad-hoc dynamic dispatch to hide type information so we get the public API we
-    // want. An evicted value really shouldn't know about the guard it came from, or need to
-    // know the key type or hasher type.
-    handle: *const (),
+    operations: &'a UnsafeCell<Vec<Operation<K, V>>>,
     operation: usize,
-    leak: unsafe fn(*const (), usize) -> *const (),
-    _lifetime: PhantomData<&'a ()>,
+    handle_uid: WriterUid,
 }
 
-impl<'a, V> Evicted<'a, V> {
+impl<'a, K, V> Evicted<'a, K, V> {
     #[inline]
-    unsafe fn new<K, S>(guard: &WriteGuard<'a, K, V, S>, value: Alias<V>) -> Self
+    unsafe fn new<S>(guard: &WriteGuard<'a, K, V, S>, value: Alias<V>) -> Self
     where
         K: Eq + Hash,
         S: BuildHasher,
     {
-        let handle: *const () = (&*guard.handle as *const WriteHandle<K, V, S>).cast();
-        let operation = guard
-            .handle
-            .operations
-            .with(|ops_ptr| unsafe { &*ops_ptr }.len() - 1);
-        let leak = |write_handle: *const (), op: usize| {
-            let write_handle_ref: &WriteHandle<K, V, S> = unsafe { &*write_handle.cast() };
-            write_handle_ref.operations.with_mut(|ops_ptr| {
-                unsafe { (&mut *ops_ptr).get_mut(op).unwrap_unchecked() }.make_leaky();
-            });
-            (&*write_handle_ref.inner as *const Handle<K, V, S>).cast()
-        };
+        let operations = &guard.handle.operations;
+        let operation = operations.with(|ops_ptr| unsafe { &*ops_ptr }.len() - 1);
 
         Self {
             value,
-            handle,
+            operations,
             operation,
-            leak,
-            _lifetime: PhantomData,
+            handle_uid: guard.handle_uid,
         }
     }
 
@@ -523,15 +537,18 @@ impl<'a, V> Evicted<'a, V> {
     /// ```
     #[must_use = "Not using a leaked value may cause a memory leak"]
     pub fn leak(evicted: Self) -> Leaked<V> {
-        let source_map = unsafe { (evicted.leak)(evicted.handle, evicted.operation) };
+        evicted.operations.with_mut(|ptr| {
+            unsafe { (&mut *ptr).get_unchecked_mut(evicted.operation) }.make_leaky()
+        });
+
         Leaked {
             value: evicted.value,
-            source_map,
+            handle_uid: evicted.handle_uid,
         }
     }
 }
 
-impl<V> Deref for Evicted<'_, V> {
+impl<K, V> Deref for Evicted<'_, K, V> {
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
@@ -550,7 +567,7 @@ impl<V> Deref for Evicted<'_, V> {
 /// for details on how to unsafely take ownership of a leaked value.
 pub struct Leaked<V> {
     value: Alias<V>,
-    source_map: *const (),
+    handle_uid: WriterUid,
 }
 
 unsafe impl<V> Send for Leaked<V> where Alias<V>: Send {}

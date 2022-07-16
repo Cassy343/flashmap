@@ -246,7 +246,7 @@ where
     /// assert_eq!(&*guard.insert(17, "seventeen".to_owned()).unwrap(), "seven teen");
     /// ```
     #[inline]
-    pub fn insert<'ret>(&mut self, key: K, value: V) -> Option<Evicted<'ret, V>>
+    pub fn insert<'ret>(&mut self, key: K, value: V) -> Option<Evicted<'ret, K, V>>
     where
         'guard: 'ret,
     {
@@ -286,7 +286,7 @@ where
     /// assert_eq!(guard.get(&1).unwrap(), "b");
     /// ```
     #[inline]
-    pub fn replace<'ret, F>(&mut self, key: K, op: F) -> Option<Evicted<'ret, V>>
+    pub fn replace<'ret, F>(&mut self, key: K, op: F) -> Option<Evicted<'ret, K, V>>
     where
         F: FnOnce(&V) -> V,
         'guard: 'ret,
@@ -311,7 +311,7 @@ where
     /// assert!(guard.remove(1).is_none());
     /// ```
     #[inline]
-    pub fn remove<'ret>(&mut self, key: K) -> Option<Evicted<'ret, V>>
+    pub fn remove<'ret>(&mut self, key: K) -> Option<Evicted<'ret, K, V>>
     where
         'guard: 'ret,
     {
@@ -360,7 +360,7 @@ where
     }
 
     /// Consumes this view and its guard, publishing all previous changes to the map.
-    /// 
+    ///
     /// This has the same effect as dropping the view. Note that the changes will only be visible
     /// through newly created read or write guards.
     #[inline]
