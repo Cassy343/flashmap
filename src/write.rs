@@ -570,9 +570,6 @@ pub struct Leaked<V> {
     handle_uid: WriterUid,
 }
 
-unsafe impl<V> Send for Leaked<V> where Alias<V>: Send {}
-unsafe impl<V> Sync for Leaked<V> where Alias<V>: Sync {}
-
 impl<V> Leaked<V> {
     /// Consumes this leaked value, providing the inner aliased value. Note that the aliased value
     /// must be manually dropped via `Alias::`[`drop`](crate::Alias::drop), or converted into an

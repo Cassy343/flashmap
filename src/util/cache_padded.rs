@@ -1,10 +1,7 @@
 // This code is not original to the flashmap project.
 // Source: https://github.com/crossbeam-rs/crossbeam/blob/1e16fc044ebb7bf1da618f07577bc369120e6ab6/crossbeam-utils/src/cache_padded.rs
 
-use std::{
-    fmt::{self, Debug, Formatter},
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Copy, Default, Hash, PartialEq, Eq)]
 // Starting from Intel's Sandy Bridge, spatial prefetcher is now pulling pairs of 64-byte cache
@@ -97,14 +94,6 @@ impl<T> Deref for CachePadded<T> {
 impl<T> DerefMut for CachePadded<T> {
     fn deref_mut(&mut self) -> &mut T {
         &mut self.value
-    }
-}
-
-impl<T: Debug> Debug for CachePadded<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CachePadded")
-            .field("value", &self.value)
-            .finish()
     }
 }
 

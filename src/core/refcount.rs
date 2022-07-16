@@ -20,14 +20,13 @@ impl RefCount {
 
     #[inline]
     fn check_overflow(value: usize) {
-        if Self::to_refcount(value) == Self::COUNT_MASK {
+        // This checks if we overflowed from bits 0-61 into bit 62 from the previous increment.
+        // This condition yields slightly better asm than `value & Self::COUNT_MASK ==
+        // Self::COUNT_MASK`, which checks if the increment we just performed overflowed. Either
+        // way is sufficient for soundness.
+        if value & (Self::COUNT_MASK + 1) > 0 {
             abort();
         }
-    }
-
-    #[inline]
-    fn to_refcount(value: usize) -> usize {
-        value & Self::COUNT_MASK
     }
 
     #[inline]
@@ -53,6 +52,7 @@ impl RefCount {
         let old_value = self
             .value
             .fetch_add(Self::MAP_INDEX_FLAG, Ordering::Relaxed);
-        Self::to_refcount(old_value)
+        // Remove the bit specifying the map, leaving just the actual count
+        old_value & Self::COUNT_MASK
     }
 }

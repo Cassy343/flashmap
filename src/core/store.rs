@@ -1,7 +1,7 @@
 use crate::loom::cell::UnsafeCell;
 use crate::util::CachePadded;
 use crate::Map;
-use std::{mem, ptr::NonNull};
+use std::{mem, ptr::NonNull, marker::PhantomData};
 
 #[repr(usize)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,12 +28,14 @@ impl MapIndex {
 
 pub struct OwnedMapAccess<K, V, S> {
     access: MapAccess<K, V, S>,
+    _dropck: PhantomData<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>,
 }
 
 impl<K, V, S> OwnedMapAccess<K, V, S> {
     pub fn new(boxed: Box<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>) -> Self {
         Self {
             access: MapAccess::new(NonNull::new(Box::into_raw(boxed)).unwrap()),
+            _dropck: PhantomData,
         }
     }
 
