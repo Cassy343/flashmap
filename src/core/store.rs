@@ -52,9 +52,7 @@ impl<K, V, S> OwnedMapAccess<K, V, S> {
 
 impl<K, V, S> Drop for OwnedMapAccess<K, V, S> {
     fn drop(&mut self) {
-        unsafe {
-            drop(Box::from_raw(self.access.maps.as_ptr()));
-        }
+        unsafe { drop(Box::from_raw(self.access.maps.as_ptr())) };
     }
 }
 

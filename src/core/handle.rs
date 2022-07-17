@@ -87,20 +87,6 @@ impl<K, V, S> Handle<K, V, S> {
     }
 
     #[inline]
-    pub fn start_read(refcount: &RefCount) -> MapIndex {
-        refcount.increment()
-    }
-
-    #[inline]
-    pub fn finish_read(refcount: &RefCount, map_index: MapIndex) -> ReaderStatus {
-        if refcount.decrement() == map_index {
-            ReaderStatus::Normal
-        } else {
-            ReaderStatus::Residual
-        }
-    }
-
-    #[inline]
     pub unsafe fn release_refcount(&self, key: usize) {
         let refcount = self.refcounts.lock().unwrap().remove(key);
 
@@ -201,10 +187,4 @@ impl<K, V, S> Drop for Handle<K, V, S> {
                 });
         });
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ReaderStatus {
-    Normal,
-    Residual,
 }

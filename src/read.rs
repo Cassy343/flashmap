@@ -1,7 +1,7 @@
 use std::{collections::hash_map::RandomState, ptr::NonNull};
 
 use crate::{
-    core::{Handle, MapAccess, MapIndex, ReaderStatus, RefCount},
+    core::{Handle, MapAccess, MapIndex, RefCount},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
     view::sealed::ReadAccess,
@@ -93,7 +93,7 @@ impl<K, V, S> ReadHandle<K, V, S> {
     /// ```
     #[inline]
     pub fn guard(&self) -> View<ReadGuard<'_, K, V, S>> {
-        let map_index = unsafe { Handle::<K, V, S>::start_read(self.refcount.as_ref()) };
+        let map_index = unsafe { self.refcount.as_ref() }.increment();
 
         View::new(ReadGuard {
             handle: self,
@@ -111,9 +111,7 @@ impl<K, V, S> Clone for ReadHandle<K, V, S> {
 
 impl<K, V, S> Drop for ReadHandle<K, V, S> {
     fn drop(&mut self) {
-        unsafe {
-            self.inner.release_refcount(self.refcount_key);
-        }
+        unsafe { self.inner.release_refcount(self.refcount_key) };
     }
 }
 
@@ -157,9 +155,22 @@ impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
 
 impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S> {
     fn drop(&mut self) {
-        let refcount = unsafe { self.handle.refcount.as_ref() };
-        if Handle::<K, V, S>::finish_read(refcount, self.map_index) == ReaderStatus::Residual {
+        let current_reader_map = unsafe { self.handle.refcount.as_ref() }.decrement();
+
+        if unlikely(current_reader_map != self.map_index) {
             unsafe { self.handle.inner.release_residual() };
         }
     }
+}
+
+#[inline]
+#[cold]
+fn cold() {}
+
+#[inline]
+fn unlikely(b: bool) -> bool {
+    if b {
+        cold();
+    }
+    b
 }

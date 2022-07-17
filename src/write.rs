@@ -128,7 +128,7 @@ where
         map.with_mut(|map_ptr| {
             self.operations.with_mut(|ops_ptr| {
                 let operations = unsafe { &mut *ops_ptr };
-                unsafe { Self::flush_operations(operations, &mut *map_ptr) }
+                unsafe { Self::flush_operations(operations, &mut *map_ptr) };
                 operations.shrink_to(64);
             });
         });
@@ -236,21 +236,20 @@ where
                     let slot =
                         unsafe { map.get_mut(BorrowHelper::new_ref(key)).unwrap_unchecked() };
                     if !leaky {
-                        unsafe {
-                            Alias::drop(slot);
-                        }
+                        unsafe { Alias::drop(slot) };
                     }
                     *slot = value;
                 }
-                RawOperation::Remove(ref key) => unsafe {
-                    let (mut k, mut v) = map
-                        .remove_entry(BorrowHelper::new_ref(key))
-                        .unwrap_unchecked();
-                    Alias::drop(&mut k);
+                RawOperation::Remove(ref key) => {
+                    let (mut k, mut v) = unsafe {
+                        map.remove_entry(BorrowHelper::new_ref(key))
+                            .unwrap_unchecked()
+                    };
+                    unsafe { Alias::drop(&mut k) };
                     if !leaky {
-                        Alias::drop(&mut v);
+                        unsafe { Alias::drop(&mut v) };
                     }
-                },
+                }
                 RawOperation::Drop(ref mut value) => unsafe { Alias::drop(value) },
             }
         }

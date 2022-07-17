@@ -10,8 +10,12 @@ pub struct RefCount {
 }
 
 impl RefCount {
+    // MSB of a usize
     const MAP_INDEX_FLAG: usize = 1usize << (usize::BITS - 1);
-    const COUNT_MASK: usize = (1usize << (usize::BITS - 2)) - 1;
+    // Second-most significant bit of a usize
+    const COUNT_OVERFLOW_BIT: usize = Self::MAP_INDEX_FLAG >> 1;
+    // A mask over every bit except the MSB
+    const COUNT_MASK: usize = Self::MAP_INDEX_FLAG - 1;
 
     pub(super) fn new(read_index: MapIndex) -> Self {
         Self {
@@ -25,7 +29,7 @@ impl RefCount {
     }
 
     #[inline]
-    pub(super) fn increment(&self) -> MapIndex {
+    pub fn increment(&self) -> MapIndex {
         let old_value = self.value.fetch_add(1, Ordering::Acquire);
 
         static ABORT_WRAPPER_FN: fn() -> MapIndex = || abort();
@@ -41,7 +45,7 @@ impl RefCount {
         // This condition yields slightly better asm than `value & Self::COUNT_MASK ==
         // Self::COUNT_MASK`, which checks if the increment we just performed overflowed. Either
         // way is sufficient for soundness.
-        if old_value & (Self::COUNT_MASK + 1) > 0 {
+        if old_value & Self::COUNT_OVERFLOW_BIT != 0 {
             // We do this abort_helper nonsense because without it unnecessary stack operations
             // are inserted into the generated assembly for this function. This is because
             // 1. rustc turns on trap-unreachable, so llvm uses call instead of jmp for call abort
@@ -53,7 +57,7 @@ impl RefCount {
     }
 
     #[inline]
-    pub(super) fn decrement(&self) -> MapIndex {
+    pub fn decrement(&self) -> MapIndex {
         let old_value = self.value.fetch_sub(1, Ordering::Release);
         Self::to_map_index(old_value)
     }
