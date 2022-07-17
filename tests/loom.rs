@@ -1,3 +1,6 @@
+//! These are tests that are specifically designed to be run with cfg(loom) to catch concurrency
+//! bugs. Tests which take a long time to run should be gated behind cfg(long_test).
+
 mod util;
 
 use flashmap::{Evicted, ReadHandle};
@@ -258,8 +261,8 @@ pub fn evicted_and_leaked_values() {
     });
 }
 
-// WARNING: this test takes about 20 minutes to run on my AMD 9 Ryzen 5900X with the
-// loomtest-fast profile
+// WARNING: this test takes about 20 minutes to run on my AMD 9 Ryzen 5900X with the loomtest-fast
+// profile. That being said, this test has caught bugs that the others have not.
 #[test]
 #[cfg(long_test)]
 pub fn many_reads_many_writes() {
