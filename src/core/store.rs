@@ -26,13 +26,15 @@ impl MapIndex {
     }
 }
 
+type MapArray<K, V, S> = [CachePadded<UnsafeCell<Map<K, V, S>>>; 2];
+
 pub struct OwnedMapAccess<K, V, S> {
     access: MapAccess<K, V, S>,
-    _dropck: PhantomData<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>,
+    _dropck: PhantomData<MapArray<K, V, S>>,
 }
 
 impl<K, V, S> OwnedMapAccess<K, V, S> {
-    pub fn new(boxed: Box<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>) -> Self {
+    pub fn new(boxed: Box<MapArray<K, V, S>>) -> Self {
         Self {
             access: MapAccess::new(NonNull::new(Box::into_raw(boxed)).unwrap()),
             _dropck: PhantomData,
@@ -57,17 +59,17 @@ impl<K, V, S> Drop for OwnedMapAccess<K, V, S> {
 }
 
 pub struct MapAccess<K, V, S> {
-    maps: NonNull<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>,
+    maps: NonNull<MapArray<K, V, S>>,
 }
 
 impl<K, V, S> MapAccess<K, V, S> {
-    fn new(maps: NonNull<[CachePadded<UnsafeCell<Map<K, V, S>>>; 2]>) -> Self {
+    fn new(maps: NonNull<MapArray<K, V, S>>) -> Self {
         Self { maps }
     }
 
     #[inline]
     pub unsafe fn get(&self, map_index: MapIndex) -> &UnsafeCell<Map<K, V, S>> {
-        let maps = unsafe { &*self.maps.as_ref() };
+        let maps = unsafe { self.maps.as_ref() };
         &maps[map_index as usize]
     }
 

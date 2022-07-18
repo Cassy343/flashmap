@@ -42,6 +42,8 @@ where
     K: Eq + Hash,
     S: BuildHasher,
 {
+    // TODO: maybe find a better name but handles are still being returned
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(options: Builder<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
         let BuilderArgs { capacity, h1, h2 } = options.into_args();
 
@@ -94,13 +96,14 @@ impl<K, V, S> Handle<K, V, S> {
     }
 
     #[inline]
+    #[allow(clippy::collapsible_if)] // Nested if makes logic more clear here
     pub unsafe fn release_residual(&self) {
         // TODO: why does loom fail if either of these are anything weaker than AcqRel?
 
         if self.residual.fetch_sub(1, Ordering::AcqRel) == 1 {
             if self.writer_state.swap(WRITABLE, Ordering::AcqRel) == WAITING_ON_READERS {
                 self.writer_thread.with(|ptr| unsafe {
-                    let parker = (&*ptr).as_ref();
+                    let parker = (*ptr).as_ref();
                     debug_assert!(parker.is_some());
                     parker.unwrap_unchecked().unpark();
                 });
@@ -185,12 +188,10 @@ impl<K, V, S> Drop for Handle<K, V, S> {
     fn drop(&mut self) {
         let reader_map_index = self.writer_map.get().other();
         self.maps.get(reader_map_index).with_mut(|ptr| unsafe {
-            (&mut *ptr)
-                .drain()
-                .for_each(|(ref mut key, ref mut value)| {
-                    Alias::drop(key);
-                    Alias::drop(value);
-                });
+            (*ptr).drain().for_each(|(ref mut key, ref mut value)| {
+                Alias::drop(key);
+                Alias::drop(value);
+            });
         });
     }
 }

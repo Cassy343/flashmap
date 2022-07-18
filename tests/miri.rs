@@ -4,8 +4,9 @@ use std::thread;
 
 use flashmap::Evicted;
 
+#[allow(clippy::borrowed_box)]
 fn dderef<T>(x: &Box<T>) -> &T {
-    &**x
+    x
 }
 
 #[test]

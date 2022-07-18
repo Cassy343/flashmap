@@ -539,9 +539,9 @@ impl<'a, K, V> Evicted<'a, K, V> {
     /// ```
     #[must_use = "Not using a leaked value may cause a memory leak"]
     pub fn leak(evicted: Self) -> Leaked<V> {
-        evicted.operations.with_mut(|ptr| {
-            unsafe { (&mut *ptr).get_unchecked_mut(evicted.operation) }.make_leaky()
-        });
+        evicted
+            .operations
+            .with_mut(|ptr| unsafe { (*ptr).get_unchecked_mut(evicted.operation) }.make_leaky());
 
         Leaked {
             value: evicted.value,
@@ -554,7 +554,7 @@ impl<K, V> Deref for Evicted<'_, K, V> {
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }
 
@@ -615,6 +615,6 @@ impl<V> Deref for Leaked<V> {
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
-        &*self.value
+        &self.value
     }
 }

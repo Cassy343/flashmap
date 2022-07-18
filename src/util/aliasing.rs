@@ -19,11 +19,7 @@ use std::{
 /// When describing the safety contracts of this type, it is useful to have a notion of "all
 /// aliases that refer to the same data." We'll call that collection of alises an "alias family."
 /// If an alias `b` is created by copying an alias `a` via [`Alias::copy`](crate::Alias::copy),
-/// then `b` is a member of the same alias family as `a`. However if the value being aliased
-/// implements `Clone`, then a deep copy of the underlying data can be performed via
-/// [`Alias::clone`](crate::Alias::clone). If instead `b` were created by cloning `a`, then `b`
-/// would **not** be in the same alias family as `a`, rather it would be the sole member of its
-/// own unique alias family.
+/// then `b` is a member of the same alias family as `a`.
 ///
 /// # Safety
 ///
@@ -139,38 +135,6 @@ impl<T> Alias<T> {
             value: MaybeUninit::new(val),
             _not_send_sync: PhantomData,
         }
-    }
-
-    /// Performs a deep clone of the underlying value, and returns an alias of the cloned value.
-    ///
-    /// Similar to [`new`](crate::Alias::new), the returned value is conceptually part of a new
-    /// alias family in which it is the only member.
-    ///
-    /// # Examples
-    ///
-    /// Cloning an aliased string:
-    /// ```
-    /// # use flashmap::Alias;
-    /// let mut a = Alias::new("foo".to_owned());
-    /// let mut b = Alias::clone(&a);
-    ///
-    /// // Equivalent values
-    /// assert_eq!(a, b);
-    /// // Different objects in memory
-    /// assert_ne!(a.as_ptr(), b.as_ptr());
-    ///
-    /// // Ensure we don't leak memory
-    /// unsafe {
-    ///     Alias::drop(&mut a);
-    ///     Alias::drop(&mut b);
-    /// }
-    /// ```
-    #[inline]
-    pub fn clone(other: &Self) -> Self
-    where
-        T: Clone,
-    {
-        Self::new(T::clone(&**other))
     }
 
     /// Create a copy of the given alias.

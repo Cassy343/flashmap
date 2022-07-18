@@ -89,6 +89,12 @@ impl Builder<RandomState> {
     }
 }
 
+impl Default for Builder<RandomState> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> Builder<S> {
     /// Sets the initial capacity of the map. If not specified, the default is 0.
     pub fn with_capacity(self, capacity: usize) -> Self {

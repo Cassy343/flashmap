@@ -76,17 +76,17 @@ mod track_access {
         }
 
         pub fn get(&self) -> &T {
-            &*self.0
+            &self.0
         }
 
         pub fn get_mut(&mut self) -> &mut T {
-            &mut *self.0
+            &mut self.0
         }
     }
 
     impl<T> Borrow<T> for TrackAccess<T> {
         fn borrow(&self) -> &T {
-            &*self.0
+            &self.0
         }
     }
 }
