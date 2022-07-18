@@ -27,7 +27,10 @@ struct WriterUid(NonZeroUsize);
 impl WriterUid {
     #[inline]
     fn next() -> Self {
-        Self(NonZeroUsize::new(NEXT_WRITER_UID.fetch_add(1, Ordering::Relaxed)).unwrap())
+        Self(
+            NonZeroUsize::new(NEXT_WRITER_UID.fetch_add(1, Ordering::Relaxed))
+                .expect("Maximum number of maps exceeded for this architecture"),
+        )
     }
 }
 
@@ -277,7 +280,7 @@ where
 ///
 /// See [`WriteHandle::guard`](crate::WriteHandle::guard) for examples. See [`View`](crate::View)
 /// for additional examples and the public API to interact with the underlying map.
-pub struct WriteGuard<'guard, K: Eq + Hash, V, S: BuildHasher> {
+pub struct WriteGuard<'guard, K: Eq + Hash, V, S: BuildHasher = RandomState> {
     map: &'guard UnsafeCell<Map<K, V, S>>,
     handle: &'guard WriteHandle<K, V, S>,
     handle_uid: WriterUid,

@@ -121,7 +121,7 @@ impl<K, V, S> Drop for ReadHandle<K, V, S> {
 /// be created in order to see updates from the writer. See
 /// [`ReadHandle::guard`](crate::ReadHandle::guard) for examples. See [`View`](crate::View) for
 /// additional examples and the public API to interact with the underlying map.
-pub struct ReadGuard<'guard, K, V, S> {
+pub struct ReadGuard<'guard, K, V, S = RandomState> {
     handle: &'guard ReadHandle<K, V, S>,
     map: &'guard UnsafeCell<Map<K, V, S>>,
     map_index: MapIndex,

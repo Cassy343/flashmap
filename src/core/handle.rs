@@ -99,8 +99,10 @@ impl<K, V, S> Handle<K, V, S> {
 
         if self.residual.fetch_sub(1, Ordering::AcqRel) == 1 {
             if self.writer_state.swap(WRITABLE, Ordering::AcqRel) == WAITING_ON_READERS {
-                self.writer_thread.with(|ptr| {
-                    unsafe { &*ptr }.as_ref().map(Thread::unpark);
+                self.writer_thread.with(|ptr| unsafe {
+                    let parker = (&*ptr).as_ref();
+                    debug_assert!(parker.is_some());
+                    parker.unwrap_unchecked().unpark();
                 });
             }
         }
@@ -126,8 +128,11 @@ impl<K, V, S> Handle<K, V, S> {
                     // Wait for the next writable map to become available
                     thread::park();
 
-                    if self.writer_state.load(Ordering::Acquire) == WRITABLE {
+                    let writer_state = self.writer_state.load(Ordering::Acquire);
+                    if writer_state == WRITABLE {
                         break;
+                    } else {
+                        debug_assert_eq!(writer_state, WAITING_ON_READERS);
                     }
                 }
             } else {
@@ -146,31 +151,32 @@ impl<K, V, S> Handle<K, V, S> {
     #[inline]
     pub unsafe fn finish_write(&self) {
         debug_assert_eq!(self.residual.load(Ordering::Relaxed), 0);
+        debug_assert_eq!(self.writer_state.load(Ordering::Relaxed), WRITABLE);
 
         self.writer_state.store(NOT_WRITABLE, Ordering::Relaxed);
 
-        fence(Ordering::Release);
-
-        // Acquire
         let guard = self.refcounts.lock().unwrap();
+
+        // This needs to be within the mutex
+        self.writer_map.set(self.writer_map.get().other());
+
+        fence(Ordering::Release);
 
         let initial_residual = guard
             .iter()
             .map(|(_, refcount)| unsafe { refcount.as_ref() }.swap_maps())
             .sum::<usize>();
 
-        // This needs to be within the mutex
-        self.writer_map.set(self.writer_map.get().other());
-
-        // Release
-        drop(guard);
-
         fence(Ordering::Acquire);
+
+        drop(guard);
 
         let latest_residual = self.residual.fetch_add(initial_residual, Ordering::AcqRel);
         let residual = initial_residual.wrapping_add(latest_residual);
         if residual == 0 {
             self.writer_state.store(WRITABLE, Ordering::Release);
+        } else {
+            debug_assert!(residual > 0);
         }
     }
 }
