@@ -62,6 +62,7 @@ impl RefCount {
         Self::to_map_index(old_value)
     }
 
+    /// The returned value, which we'll call `c`, will always satisfy `0 <= c <= isize::MAX`.
     #[inline]
     pub(super) fn swap_maps(&self) -> usize {
         let old_value = self

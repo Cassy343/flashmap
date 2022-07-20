@@ -4,6 +4,7 @@ use crate::{
     core::{Handle, MapAccess, MapIndex, RefCount},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
+    util::unlikely,
     view::sealed::ReadAccess,
     Map, View,
 };
@@ -161,16 +162,4 @@ impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S> {
             unsafe { self.handle.inner.release_residual() };
         }
     }
-}
-
-#[inline]
-#[cold]
-fn cold() {}
-
-#[inline]
-fn unlikely(b: bool) -> bool {
-    if b {
-        cold();
-    }
-    b
 }

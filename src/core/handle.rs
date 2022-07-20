@@ -6,17 +6,18 @@ use crate::{
     loom::{
         cell::{Cell, UnsafeCell},
         sync::{
-            atomic::{fence, AtomicU8, AtomicUsize, Ordering},
+            atomic::{fence, AtomicIsize, AtomicU8, Ordering},
             Arc, Mutex,
         },
         thread::{self, Thread},
     },
-    util::Alias,
+    util::{cold, lock, Alias},
 };
 use crate::{util::CachePadded, Map, ReadHandle, WriteHandle};
 use crate::{Builder, BuilderArgs};
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
+use std::process::abort;
 use std::ptr::{self, NonNull};
 
 use super::{OwnedMapAccess, RefCount};
@@ -26,7 +27,7 @@ const NOT_WRITABLE: u8 = 1;
 const WAITING_ON_READERS: u8 = 2;
 
 pub struct Handle<K, V, S = DefaultHashBuilder> {
-    residual: AtomicUsize,
+    residual: AtomicIsize,
     // All readers need to be dropped before we're dropped, so we don't need to worry about
     // freeing any refcounts.
     refcounts: Mutex<Slab<NonNull<RefCount>>>,
@@ -59,7 +60,7 @@ where
         let init_refcount_capacity = 1;
 
         let me = Arc::new(Self {
-            residual: AtomicUsize::new(0),
+            residual: AtomicIsize::new(0),
             refcounts: Mutex::new(Slab::with_capacity(init_refcount_capacity)),
             writer_thread: UnsafeCell::new(None),
             writer_state: AtomicU8::new(WRITABLE),
@@ -78,7 +79,7 @@ where
 impl<K, V, S> Handle<K, V, S> {
     #[inline]
     pub fn new_reader(me: Arc<Self>) -> ReadHandle<K, V, S> {
-        let mut guard = me.refcounts.lock().unwrap();
+        let mut guard = lock(&me.refcounts);
         let refcount = RefCount::new(me.writer_map.get().other());
         let refcount = NonNull::new(Box::into_raw(Box::new(refcount))).unwrap();
         let key = guard.insert(refcount);
@@ -90,7 +91,7 @@ impl<K, V, S> Handle<K, V, S> {
 
     #[inline]
     pub unsafe fn release_refcount(&self, key: usize) {
-        let refcount = self.refcounts.lock().unwrap().remove(key);
+        let refcount = lock(&self.refcounts).remove(key);
 
         drop(unsafe { Box::from_raw(refcount.as_ptr()) });
     }
@@ -102,11 +103,22 @@ impl<K, V, S> Handle<K, V, S> {
 
         if self.residual.fetch_sub(1, Ordering::AcqRel) == 1 {
             if self.writer_state.swap(WRITABLE, Ordering::AcqRel) == WAITING_ON_READERS {
-                self.writer_thread.with(|ptr| unsafe {
-                    let parker = (*ptr).as_ref();
-                    debug_assert!(parker.is_some());
-                    parker.unwrap_unchecked().unpark();
-                });
+                let thread = self
+                    .writer_thread
+                    .with_mut(|ptr| unsafe { &mut *ptr }.take());
+
+                match thread {
+                    Some(thread) => thread.unpark(),
+                    None => {
+                        if cfg!(debug_assertions) {
+                            unreachable!(
+                                "WAITING_ON_READERS state observed when writer_thread is None"
+                            );
+                        } else {
+                            cold();
+                        }
+                    }
+                }
             }
         }
     }
@@ -116,8 +128,11 @@ impl<K, V, S> Handle<K, V, S> {
         let writer_state = self.writer_state.load(Ordering::Acquire);
 
         if writer_state == NOT_WRITABLE {
-            self.writer_thread
-                .with_mut(|ptr| drop(unsafe { ptr::replace(ptr, Some(thread::current())) }));
+            let current = Some(thread::current());
+            let old = self
+                .writer_thread
+                .with_mut(|ptr| unsafe { ptr::replace(ptr, current) });
+            drop(old);
 
             let exchange_result = self.writer_state.compare_exchange(
                 NOT_WRITABLE,
@@ -158,17 +173,28 @@ impl<K, V, S> Handle<K, V, S> {
 
         self.writer_state.store(NOT_WRITABLE, Ordering::Relaxed);
 
-        let guard = self.refcounts.lock().unwrap();
+        let guard = lock(&self.refcounts);
 
         // This needs to be within the mutex
         self.writer_map.set(self.writer_map.get().other());
 
         fence(Ordering::Release);
 
-        let initial_residual = guard
-            .iter()
-            .map(|(_, refcount)| unsafe { refcount.as_ref() }.swap_maps())
-            .sum::<usize>();
+        let mut initial_residual = 0isize;
+
+        // Clippy doesn't like that we're iterating over something in a mutex apparently
+        #[allow(clippy::significant_drop_in_scrutinee)]
+        for (_, refcount) in guard.iter() {
+            let refcount = unsafe { refcount.as_ref() };
+
+            // Because the highest bit is used in the refcount, this cast will not be lossy
+            initial_residual += refcount.swap_maps() as isize;
+
+            // If we overflowed, then abort.
+            if initial_residual < 0 {
+                abort();
+            }
+        }
 
         fence(Ordering::Acquire);
 
@@ -177,7 +203,7 @@ impl<K, V, S> Handle<K, V, S> {
         let latest_residual = self.residual.fetch_add(initial_residual, Ordering::AcqRel);
         let residual = initial_residual.wrapping_add(latest_residual);
         if residual == 0 {
-            self.writer_state.store(WRITABLE, Ordering::Release);
+            self.writer_state.store(WRITABLE, Ordering::Relaxed);
         } else {
             debug_assert!(residual > 0);
         }

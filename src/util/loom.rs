@@ -1,8 +1,14 @@
 #[cfg(loom)]
-pub use loom::{hint, sync, thread};
+pub use loom::{hint, thread};
 
 #[cfg(not(loom))]
 pub use std::{hint, sync, thread};
+
+#[cfg(loom)]
+pub mod sync {
+    pub use loom::sync::*;
+    pub use std::sync::PoisonError;
+}
 
 #[cfg(loom)]
 pub mod cell {
