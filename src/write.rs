@@ -10,7 +10,7 @@ use std::{
 use hashbrown::hash_map::RawEntryMut;
 
 use crate::{
-    core::Handle,
+    core::Core,
     loom::cell::UnsafeCell,
     loom::sync::Arc,
     util::{Alias, BorrowHelper},
@@ -19,13 +19,13 @@ use crate::{
 };
 
 static NEXT_WRITER_UID: AtomicUsize = AtomicUsize::new(1);
+const LEAKED_VALUE_MISMATCH: &str = "Leaked value is not from this map";
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Clone, Copy)]
 struct WriterUid(NonZeroUsize);
 
 impl WriterUid {
-    #[inline]
     fn next() -> Self {
         Self(
             NonZeroUsize::new(NEXT_WRITER_UID.fetch_add(1, Ordering::Relaxed))
@@ -43,7 +43,7 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    inner: Arc<Handle<K, V, S>>,
+    core: Arc<Core<K, V, S>>,
     operations: UnsafeCell<Vec<Operation<K, V>>>,
     uid: WriterUid,
 }
@@ -61,9 +61,9 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub(crate) fn new(inner: Arc<Handle<K, V, S>>) -> Self {
+    pub(crate) fn new(core: Arc<Core<K, V, S>>) -> Self {
         Self {
-            inner,
+            core,
             operations: UnsafeCell::new(Vec::new()),
             uid: WriterUid::next(),
         }
@@ -78,7 +78,7 @@ where
     /// `Leaked::`[`into_inner`](crate::Leaked::into_inner) for an example use-case.
     #[inline]
     pub fn synchronize(&self) {
-        self.inner.synchronize();
+        self.core.synchronize();
     }
 
     /// Creates a new [`WriteGuard`](crate::WriteGuard) wrapped in a [`View`](crate::View),
@@ -124,10 +124,9 @@ where
     /// assert_eq!(&*guard.remove("apple".to_owned()).unwrap(), "red");
     /// assert!(!guard.contains_key("apple"));
     /// ```
-    #[inline]
     pub fn guard(&mut self) -> View<WriteGuard<'_, K, V, S>> {
         self.synchronize();
-        let map = self.inner.writer_map();
+        let map = self.core.writer_map();
         map.with_mut(|map_ptr| {
             self.operations.with_mut(|ops_ptr| {
                 let operations = unsafe { &mut *ops_ptr };
@@ -213,10 +212,7 @@ where
         self.synchronize();
         let uid = self.uid;
         move |leaked| {
-            assert!(
-                uid == leaked.handle_uid,
-                "Leaked value is not from this map"
-            );
+            assert!(uid == leaked.handle_uid, "{LEAKED_VALUE_MISMATCH}");
             unsafe { Alias::into_owned(leaked.value) }
         }
     }
@@ -266,7 +262,7 @@ where
 {
     fn drop(&mut self) {
         self.synchronize();
-        let map = self.inner.writer_map();
+        let map = self.core.writer_map();
         map.with_mut(|map_ptr| {
             self.operations.with_mut(|ops_ptr| unsafe {
                 Self::flush_operations(&mut *ops_ptr, &mut *map_ptr)
@@ -293,6 +289,7 @@ where
 {
     type Map = Map<K, V, S>;
 
+    #[inline]
     fn with_map<'read, F, R>(&'read self, op: F) -> R
     where
         F: FnOnce(&'read Self::Map) -> R,
@@ -390,7 +387,7 @@ where
     pub(crate) fn drop_lazily(&self, leaked: Leaked<V>) {
         assert!(
             self.handle_uid == leaked.handle_uid,
-            "Leaked value is not from this map"
+            "{LEAKED_VALUE_MISMATCH}"
         );
         self.handle.operations.with_mut(|ops_ptr| {
             unsafe { &mut *ops_ptr }.push(Operation::new(RawOperation::Drop(Leaked::into_inner(
@@ -412,7 +409,7 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        unsafe { self.handle.inner.finish_write() };
+        unsafe { self.handle.core.finish_write() };
     }
 }
 

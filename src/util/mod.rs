@@ -21,8 +21,22 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cold]
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn cold() {}
 
+#[cfg(feature = "nightly")]
+pub(crate) use ::core::intrinsics::{likely, unlikely};
+
+#[cfg(not(feature = "nightly"))]
+#[inline]
+pub(crate) fn likely(b: bool) -> bool {
+    if !b {
+        cold();
+    }
+    b
+}
+
+#[cfg(not(feature = "nightly"))]
 #[inline]
 pub(crate) fn unlikely(b: bool) -> bool {
     if b {

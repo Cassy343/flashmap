@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "nightly", feature(core_intrinsics))]
 #![deny(rust_2018_idioms, unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
@@ -15,6 +16,7 @@ pub use util::Alias;
 pub use view::View;
 pub use write::*;
 
+use self::core::Core;
 use std::{
     collections::hash_map::RandomState,
     fmt::{self, Debug, Formatter},
@@ -149,7 +151,7 @@ impl<S> Builder<S> {
         K: Eq + Hash,
         S: BuildHasher,
     {
-        core::Handle::new(self)
+        Core::build_map(self)
     }
 
     pub(crate) fn into_args(self) -> BuilderArgs<S> {

@@ -23,6 +23,7 @@ pub struct View<G> {
 }
 
 impl<G> View<G> {
+    #[inline]
     pub(crate) fn new(guard: G) -> Self {
         Self { guard }
     }

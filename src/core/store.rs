@@ -29,14 +29,14 @@ impl MapIndex {
 type MapArray<K, V, S> = [CachePadded<UnsafeCell<Map<K, V, S>>>; 2];
 
 pub struct OwnedMapAccess<K, V, S> {
-    access: MapAccess<K, V, S>,
+    access: SharedMapAccess<K, V, S>,
     _dropck: PhantomData<MapArray<K, V, S>>,
 }
 
 impl<K, V, S> OwnedMapAccess<K, V, S> {
     pub fn new(boxed: Box<MapArray<K, V, S>>) -> Self {
         Self {
-            access: MapAccess::new(NonNull::new(Box::into_raw(boxed)).unwrap()),
+            access: SharedMapAccess::new(NonNull::new(Box::into_raw(boxed)).unwrap()),
             _dropck: PhantomData,
         }
     }
@@ -46,8 +46,7 @@ impl<K, V, S> OwnedMapAccess<K, V, S> {
         unsafe { self.access.get(map_index) }
     }
 
-    #[inline]
-    pub fn share(&self) -> MapAccess<K, V, S> {
+    pub fn share(&self) -> SharedMapAccess<K, V, S> {
         self.access.clone()
     }
 }
@@ -58,11 +57,11 @@ impl<K, V, S> Drop for OwnedMapAccess<K, V, S> {
     }
 }
 
-pub struct MapAccess<K, V, S> {
+pub struct SharedMapAccess<K, V, S> {
     maps: NonNull<MapArray<K, V, S>>,
 }
 
-impl<K, V, S> MapAccess<K, V, S> {
+impl<K, V, S> SharedMapAccess<K, V, S> {
     fn new(maps: NonNull<MapArray<K, V, S>>) -> Self {
         Self { maps }
     }

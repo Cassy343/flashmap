@@ -1,7 +1,7 @@
 use std::{collections::hash_map::RandomState, ptr::NonNull};
 
 use crate::{
-    core::{Handle, MapAccess, MapIndex, RefCount},
+    core::{Core, MapIndex, RefCount, SharedMapAccess},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
     util::unlikely,
@@ -14,8 +14,8 @@ use crate::{
 /// This type allows for the creation of [`ReadGuard`s](crate::ReadGuard), which provide immutable
 /// access to the underlying data.
 pub struct ReadHandle<K, V, S = RandomState> {
-    inner: Arc<Handle<K, V, S>>,
-    map_access: MapAccess<K, V, S>,
+    core: Arc<Core<K, V, S>>,
+    map_access: SharedMapAccess<K, V, S>,
     refcount: NonNull<RefCount>,
     refcount_key: usize,
 }
@@ -37,15 +37,15 @@ where
 
 impl<K, V, S> ReadHandle<K, V, S> {
     pub(crate) fn new(
-        inner: Arc<Handle<K, V, S>>,
-        map_access: MapAccess<K, V, S>,
+        core: Arc<Core<K, V, S>>,
+        map_access: SharedMapAccess<K, V, S>,
         refcount: NonNull<RefCount>,
         refcount_key: usize,
     ) -> Self {
         Self {
             refcount,
             map_access,
-            inner,
+            core,
             refcount_key,
         }
     }
@@ -106,13 +106,13 @@ impl<K, V, S> ReadHandle<K, V, S> {
 
 impl<K, V, S> Clone for ReadHandle<K, V, S> {
     fn clone(&self) -> Self {
-        Handle::new_reader(Arc::clone(&self.inner))
+        Core::new_reader(Arc::clone(&self.core))
     }
 }
 
 impl<K, V, S> Drop for ReadHandle<K, V, S> {
     fn drop(&mut self) {
-        unsafe { self.inner.release_refcount(self.refcount_key) };
+        unsafe { self.core.release_refcount(self.refcount_key) };
     }
 }
 
@@ -146,6 +146,7 @@ where
 impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
     type Map = Map<K, V, S>;
 
+    #[inline]
     fn with_map<'read, F, R>(&'read self, op: F) -> R
     where
         F: FnOnce(&'read Self::Map) -> R,
@@ -155,11 +156,12 @@ impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
 }
 
 impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S> {
+    #[inline]
     fn drop(&mut self) {
         let current_reader_map = unsafe { self.handle.refcount.as_ref() }.decrement();
 
         if unlikely(current_reader_map != self.map_index) {
-            unsafe { self.handle.inner.release_residual() };
+            unsafe { self.handle.core.release_residual() };
         }
     }
 }

@@ -24,6 +24,10 @@ features = ["inline-more"]
 [target.'cfg(loom)'.dependencies]
 loom = { version = "0.5.6", features = ["checkpoint"] }
 
+[features]
+default = []
+nightly = []
+
 [profile.loomtest]
 inherits = "release"
 debug = 2
