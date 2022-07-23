@@ -1,5 +1,8 @@
 //! Tests the functionality of the map. IE, these test focus on making sure map operations like
 //! insert/remove etc. work as expected.
+//!
+//! Many of these tests are modified versions of the unit tests here:
+//! https://github.com/rust-lang/hashbrown/blob/83a2a98131212f5999479b885188b85c0c8a79d6/src/map.rs
 
 mod util;
 
@@ -249,6 +252,7 @@ fn complex_oplog() {
 
 #[test]
 #[should_panic]
+#[cfg(not(miri))] // This test leaks memory, but that's expected
 fn invalid_reclamation() {
     let (mut w1, _r1) = flashmap::new::<Box<i32>, Box<i32>>();
     let (w2, _r2) = flashmap::new::<Box<i32>, Box<i32>>();
@@ -262,6 +266,7 @@ fn invalid_reclamation() {
 
 #[test]
 #[should_panic]
+#[cfg(not(miri))] // This test leaks memory, but that's expected
 fn invalid_lazy_drop() {
     let (mut w1, _r1) = flashmap::new::<Box<i32>, Box<i32>>();
     let (mut w2, _r2) = flashmap::new::<Box<i32>, Box<i32>>();
