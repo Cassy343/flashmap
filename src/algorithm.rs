@@ -6,7 +6,7 @@ There is no code or API surface in this module, just documentation for the under
 # General Design
 
 The purpose behind this concurrent map implementation is to minimize the overhead for reading as
-much as possible. This presents obvious challenges since readers cannot read the map while it is
+much as possible. This presents obvious challenges since readers cannot access the map while it is
 being written to. We solve this problem by keeping two copies of the underlying map - one for the
 writer to modify, and one for the readers to read from. When the writer wants to publish its
 modifications, we atomically swap the two maps such that new readers see the writer's changes. We
@@ -62,7 +62,7 @@ count (refcount) which it uses to track the number of outstanding guards which n
 In addition to the number of outstanding guards, the refcount is also used to store the current
 readable map (the map which new read guards should point to). Since there are only two maps, this
 information is stored in the high bit of the refcount, and the actual guard count is stored in the
-lower `usize::BITS - 2` bits (we don't use one bit to check for overflow).
+lower `usize::BITS - 2` bits (we don't use a bit so we can check for overflow).
 
 A refcount has three principle operations: increment, decrement, and swap maps. Part of the
 implementation is shown below:
@@ -72,6 +72,8 @@ pub struct RefCount {
 }
 
 impl RefCount {
+    /* The implementation of some helpers has been omitted for brevity */
+
     pub fn increment(&self) -> MapIndex {
         let old_value = self.value.fetch_add(1, Ordering::Acquire);
         Self::check_overflow(old_value);
@@ -130,67 +132,66 @@ with the write algorithm.
 
 ## Parking/Unparking the Writer
 
-The writer/writable map can be in one of three states:
-- `WRITABLE`, meaning the writer can freely modify its map
-- `NOT_WRITABLE`, meaning there are residual readers, so the writer must wait for them to switch
-  to the new map
-- `WAITING_ON_READERS`, meaning the writer is currently parked or preparing to park, and is waiting
-  to be awoken by the last residual reader
+Parking and unparking the writer is also managed through the `residual` quantity. The residual
+count is stored in the lower 63 bits (or however many for the given architecture), and the highest
+bit signals whether or not the writer is waiting to be unparked.
 
-When the writer prepares to park, it writes its parker to memory and attempts a CAS on the state to
-transition it from `NOT_WRITABLE` to `WAITING_ON_READERS`. If successful, it parks. If not, then
-the state must have been switched to `WRITABLE` by the final reader, so we don't park.
+When the writer prepares to park, it sets the high bit of the residual count to 1. If the return
+value of this RMW operation signals that no residual readers were left, then the count is set to
+zero and the writer does not park. Otherwise, it parks.
 
-When the last residual reader decides to unpark the writer, it will atomically swap its state to
-`WRITABLE`, and if the old state was `WAITING_ON_READERS`, then it will unpark the writer.
+When the last residual reader decides to unpark the writer, it will atomically set the residual
+count to 0 and then `unpark` the writing thread.
 
 ## The Write Algorithm
 
-The write algorithm is split into two parts: `start_write`, and `finish_write`. When a new write
-guard is created, `start_write` is called, and when that guard is dropped `finish_write` is called.
+The write algorithm is split into two parts: `synchronize` + start write, and `finish_write`. When
+a new write guard is created, `start_write` is called, and when that guard is dropped
+`finish_write` is called.
 
-`start_write`:
-1. If one of the maps is not available to write to, then block, as described above.
-2. Once unblocked, return a reference to the writable map.
-3. Apply changes from previous write.
+`synchronize` + start write:
+1. If there are no residual readers, we are done.
+2. If there are residual readers, then park as described above.
+3. Once unblocked, obtain a reference to the writable map.
+4. Apply changes from previous write.
 
-Mind blowing, I know. After these steps but before `finish_write`, the changes to the map are made
-and stored in the operation log.
+After these steps but before `finish_write`, the changes to the writable map are made and stored in
+the operation log.
 
 `finish_write`:
-1. Set the writer state to `NOT_WRITABLE`.
-2. Acquire the lock on the refcount array.
+1. Acquire the lock on the refcount array.
+2. Swap out the value of the field storing the writable map with the old map.
 3. Call `swap_maps` on each refcount in the array, and (non-atomically) accumulate a sum of the
    returned residual count. Call this sum `initial_residual`.
-4. Swap out the value of the field storing the writable map with the old map.
-5. Release the lock on the refcount array.
-6. Atomically add `initial_residual` to the actual `residual` counter the readers will be
-   decrementing. If we observe that the new value after the `fetch_add` is 0, then there are no
-   residual readers, so we change our state to `WRITABLE`.
+4. Release the lock on the refcount array.
+5. Atomically add `initial_residual` to the actual `residual` counter the readers will be
+   decrementing. If there were no residual readers, or they finished reading while performing 3,
+   then the residual count is now 0, signaling that we don't need to park on the next call to
+   `synchronize`.
 
 Note that read handles are not swapped to the new map at the same time, this is done one-by-one.
 
 An important invariant of this algorithm is that `residual == 0` whenever `finish_write` is called.
 That way, either the writing thread will see `residual == 0` after swapping all the maps, or one
-of the residual readers will see `residual == 1` as the old value when it performs its atomic
-decrement. In either case, this provides a definite signal that there are no more readers lingering
-on the old map.
+of the residual readers will see `residual & isize::MAX == 1` as the old value when it performs its
+atomic decrement. In either case, this provides a definite signal that there are no more readers
+lingering on the old map.
 
 # Recap
 
 Creating a read guard corresponds to an atomic increment, and dropping a read guard corresponds to
-an atomic decrement, and at most one reader will perform an additional swap, and even then only
-some of the time unpark the writer. So overall the readers' critical path is wait-free if this
-crate is compiled on an architecture which supports atomic fetch-adds, and even if not, or the
-unparking logic is engaged, those operations are still fairly cheap.
+an atomic decrement, and at most one reader will execute the logic to unpark the writer. So overall
+the readers' critical path is wait-free if this crate is compiled on an architecture which supports
+wait-free atomic fetch-adds, and even if not, or the unparking logic is engaged, those operations
+are still fairly cheap compared to hash map operations.
 
-Creating a write guard involves executing the `start_write` algorithm and then flushing the
-operations from the previous write. When the write guard is dropped, the maps are swapped, but no
-modifications to either map is made until the next creation of the write guard. This means that the
-maps (after the first write) are always out of sync technically, but this is by design. If we
-assume that there is some non-negligible amount of time between writes, and that readers don't have
-large critical sections, then that means the writer will almost never have to wait! The time
-between writes gives the residual readers a chance to move to the new map, and thus when the writer
-goes to write again, it won't have to wait for the readers.
+Creating a write guard involves executing the `synchronize` + start write algorithm and then
+flushing the operations from the previous write. When the write guard is dropped, the maps are
+swapped, but no modifications to either map is made until the next creation of the write guard.
+This means that the maps (after the first write) are always out of sync technically, but this is by
+design. If we assume that there is some non-negligible amount of time between writes, and that
+readers don't have large critical sections, then that means the writer will almost never have to
+wait! The time between writes gives the residual readers a chance to move to the new map, and thus
+when the writer goes to write again, it won't have to wait for the readers.
 
 */

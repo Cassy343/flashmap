@@ -14,10 +14,10 @@ categories = ["concurrency", "data-structures"]
 
 [dependencies]
 num_cpus = "1"
-slab = "0.4.6"
+slab = "0.4.7"
 
 [dependencies.hashbrown]
-version = "0.12.1"
+version = "0.12.3"
 default-features = false
 features = ["inline-more"]
 

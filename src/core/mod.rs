@@ -11,7 +11,7 @@ use crate::{
     loom::{
         cell::{Cell, UnsafeCell},
         sync::{
-            atomic::{fence, AtomicIsize, AtomicU8, Ordering},
+            atomic::{fence, AtomicIsize, Ordering},
             Arc, Mutex,
         },
         thread::{self, Thread},
@@ -25,17 +25,12 @@ use std::marker::PhantomData;
 use std::process::abort;
 use std::ptr::{self, NonNull};
 
-const WRITABLE: u8 = 0;
-const NOT_WRITABLE: u8 = 1;
-const WAITING_ON_READERS: u8 = 2;
-
 pub struct Core<K, V, S = DefaultHashBuilder> {
     residual: AtomicIsize,
     // All readers need to be dropped before we're dropped, so we don't need to worry about
     // freeing any refcounts.
     refcounts: Mutex<Slab<NonNull<RefCount>>>,
     writer_thread: UnsafeCell<Option<Thread>>,
-    writer_state: AtomicU8,
     writer_map: Cell<MapIndex>,
     maps: OwnedMapAccess<K, V, S>,
     // TODO: figure out if core can implement send or sync
@@ -65,7 +60,6 @@ where
             residual: AtomicIsize::new(0),
             refcounts: Mutex::new(Slab::with_capacity(init_refcount_capacity)),
             writer_thread: UnsafeCell::new(None),
-            writer_state: AtomicU8::new(WRITABLE),
             writer_map: Cell::new(MapIndex::Second),
             maps: OwnedMapAccess::new(maps),
             _not_send_sync: PhantomData,
@@ -98,25 +92,18 @@ impl<K, V, S> Core<K, V, S> {
 
     #[inline]
     pub unsafe fn release_residual(&self) {
-        // TODO: why does loom fail if either of these are anything weaker than AcqRel?
+        let last_residual = self.residual.fetch_sub(1, Ordering::AcqRel);
 
         // If we were not the last residual reader, we do nothing.
-        if self.residual.fetch_sub(1, Ordering::AcqRel) != 1 {
+        if last_residual != isize::MIN + 1 {
             return;
         }
 
-        // If we were the last residual reader, but the writer is not waiting on us, we do nothing.
-        if self.writer_state.swap(WRITABLE, Ordering::AcqRel) != WAITING_ON_READERS {
-            return;
-        }
+        self.residual.store(0, Ordering::Release);
 
         // Since we were the last reader, and the writer was waiting on us, it's our job to wake it
         // up.
-        let thread = self
-            .writer_thread
-            .with_mut(|ptr| unsafe { &mut *ptr }.take());
-
-        match thread {
+        self.writer_thread.with(|ptr| match unsafe { &*ptr } {
             Some(thread) => thread.unpark(),
             // This branch is entirely unreachable (assuming this library is coded correctly),
             // however I'd like to keep the additional code around reading as small as possible,
@@ -132,44 +119,37 @@ impl<K, V, S> Core<K, V, S> {
                     crate::util::cold();
                 }
             }
-        }
+        });
     }
 
     #[inline]
     pub fn synchronize(&self) {
-        let writer_state = self.writer_state.load(Ordering::Acquire);
+        let residual = self.residual.load(Ordering::Acquire);
 
-        if writer_state == NOT_WRITABLE {
+        if residual != 0 {
             let current = Some(thread::current());
             let old = self
                 .writer_thread
                 .with_mut(|ptr| unsafe { ptr::replace(ptr, current) });
             drop(old);
 
-            let exchange_result = self.writer_state.compare_exchange(
-                NOT_WRITABLE,
-                WAITING_ON_READERS,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            let latest_residual = self.residual.fetch_add(isize::MIN, Ordering::AcqRel);
 
-            if likely(exchange_result == Ok(NOT_WRITABLE)) {
+            if likely(latest_residual != 0) {
                 loop {
                     // Wait for the next writable map to become available
                     thread::park();
 
-                    let writer_state = self.writer_state.load(Ordering::Acquire);
-                    if likely(writer_state == WRITABLE) {
+                    let residual = self.residual.load(Ordering::Acquire);
+                    if likely(residual == 0) {
                         break;
                     } else {
-                        debug_assert_eq!(writer_state, WAITING_ON_READERS);
+                        debug_assert!(residual < 0);
                     }
                 }
             } else {
-                debug_assert_eq!(exchange_result, Err(WRITABLE));
+                self.residual.store(0, Ordering::Release);
             }
-        } else {
-            debug_assert_eq!(writer_state, WRITABLE);
         }
     }
 
@@ -181,9 +161,6 @@ impl<K, V, S> Core<K, V, S> {
     #[inline]
     pub unsafe fn finish_write(&self) {
         debug_assert_eq!(self.residual.load(Ordering::Relaxed), 0);
-        debug_assert_eq!(self.writer_state.load(Ordering::Relaxed), WRITABLE);
-
-        self.writer_state.store(NOT_WRITABLE, Ordering::Relaxed);
 
         let guard = lock(&self.refcounts);
 
@@ -212,13 +189,7 @@ impl<K, V, S> Core<K, V, S> {
 
         drop(guard);
 
-        let latest_residual = self.residual.fetch_add(initial_residual, Ordering::AcqRel);
-        let residual = initial_residual.wrapping_add(latest_residual);
-        if residual == 0 {
-            self.writer_state.store(WRITABLE, Ordering::Relaxed);
-        } else {
-            debug_assert!(residual > 0);
-        }
+        self.residual.fetch_add(initial_residual, Ordering::AcqRel);
     }
 }
 

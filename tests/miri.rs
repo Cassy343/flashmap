@@ -1,13 +1,10 @@
 //! These tests focus on creating interesting interleavings of borrows and lifetimes.
 
-use std::thread;
+mod util;
 
 use flashmap::Evicted;
-
-#[allow(clippy::borrowed_box)]
-fn dderef<T>(x: &Box<T>) -> &T {
-    x
-}
+use std::thread;
+use util::dderef;
 
 #[test]
 pub fn nested_readers() {
