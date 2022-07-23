@@ -30,7 +30,11 @@ mod track_access {
         hash::{Hash, Hasher},
     };
 
+    use flashmap::TrustedHashEq;
+
     pub struct TrackAccess<T>(Track<Box<UnsafeCell<T>>>);
+
+    unsafe impl<T> TrustedHashEq for TrackAccess<T> where Self: Hash + Eq {}
 
     impl<T> TrackAccess<T> {
         pub fn new(val: T) -> Self {
@@ -72,10 +76,15 @@ mod track_access {
 #[cfg(not(loom))]
 mod track_access {
     use std::borrow::Borrow;
+    use std::hash::Hash;
+
+    use flashmap::TrustedHashEq;
 
     // The intent is that the tests are run with miri which will do the tracking through the box
     #[derive(PartialEq, Eq, Hash)]
     pub struct TrackAccess<T>(Box<T>);
+
+    unsafe impl<T> TrustedHashEq for TrackAccess<T> where Self: Hash + Eq {}
 
     impl<T> TrackAccess<T> {
         pub fn new(val: T) -> Self {

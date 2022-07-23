@@ -42,7 +42,7 @@ where
     K: Eq + Hash,
     S: BuildHasher,
 {
-    pub fn build_map(options: Builder<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
+    pub unsafe fn build_map(options: Builder<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
         let BuilderArgs { capacity, h1, h2 } = options.into_args();
 
         let maps = Box::new([

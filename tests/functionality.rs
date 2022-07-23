@@ -6,7 +6,6 @@
 
 mod util;
 
-use flashmap::Evicted;
 use util::dderef;
 
 #[test]
@@ -259,7 +258,10 @@ fn invalid_reclamation() {
 
     let mut guard = w1.guard();
     guard.insert(Box::new(1), Box::new(1));
-    let leaked = guard.remove(Box::new(1)).map(Evicted::leak).unwrap();
+    let leaked = guard
+        .remove(Box::new(1))
+        .map(flashmap::Evicted::leak)
+        .unwrap();
     drop(guard);
     w2.reclaim_one(leaked);
 }
@@ -273,7 +275,10 @@ fn invalid_lazy_drop() {
 
     let mut guard = w1.guard();
     guard.insert(Box::new(1), Box::new(1));
-    let leaked = guard.remove(Box::new(1)).map(Evicted::leak).unwrap();
+    let leaked = guard
+        .remove(Box::new(1))
+        .map(flashmap::Evicted::leak)
+        .unwrap();
     w2.guard().drop_lazily(leaked);
     drop(guard);
 }

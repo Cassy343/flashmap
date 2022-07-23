@@ -1,5 +1,6 @@
 mod aliasing;
 mod cache_padded;
+pub mod deterministic;
 pub mod loom;
 
 pub use aliasing::*;

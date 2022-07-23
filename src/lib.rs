@@ -12,7 +12,7 @@ mod write;
 
 pub use read::*;
 pub(crate) use util::loom;
-pub use util::Alias;
+pub use util::{deterministic::*, Alias};
 pub use view::View;
 pub use write::*;
 
@@ -31,7 +31,7 @@ pub(crate) type Map<K, V, S = RandomState> = hashbrown::HashMap<Alias<K>, Alias<
 /// [`with_hasher`](crate::with_hasher), and [`Builder`](crate::Builder).
 pub fn new<K, V>() -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where
-    K: Eq + Hash,
+    K: TrustedHashEq,
 {
     Builder::new().build()
 }
@@ -42,7 +42,7 @@ where
 /// If you wish to specify additional parameters, see [`Builder`](crate::Builder).
 pub fn with_capacity<K, V>(capacity: usize) -> (WriteHandle<K, V>, ReadHandle<K, V>)
 where
-    K: Eq + Hash,
+    K: TrustedHashEq,
 {
     Builder::new().with_capacity(capacity).build()
 }
@@ -50,12 +50,17 @@ where
 /// Creates a new map with the specified hasher.
 ///
 /// If you wish to specify additional parameters, see [`Builder`](crate::Builder).
-pub fn with_hasher<K, V, S>(hasher: S) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
+///
+/// # Safety
+///
+/// The given hasher builder must produce a deterministic hasher. In other words, the built hasher
+/// must always produce the same hash given the same input and initial state.
+pub unsafe fn with_hasher<K, V, S>(hasher: S) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
 where
-    K: Eq + Hash,
+    K: TrustedHashEq,
     S: Clone + BuildHasher,
 {
-    Builder::new().with_hasher(hasher).build()
+    unsafe { Builder::new().with_hasher(hasher).build() }
 }
 
 /// A builder for a map.
@@ -108,7 +113,11 @@ impl<S> Builder<S> {
 
     /// Sets the hasher for the underlying map. The provided hasher must implement `Clone` due to
     /// the implementation details of this crate.
-    pub fn with_hasher<H>(self, hasher: H) -> Builder<H>
+    ///
+    /// # Safety
+    ///
+    /// See [`crate::with_hasher`](crate::with_hasher).
+    pub unsafe fn with_hasher<H>(self, hasher: H) -> Builder<H>
     where
         H: Clone + BuildHasher,
     {
@@ -122,7 +131,11 @@ impl<S> Builder<S> {
     /// [`with_hasher`](crate::Builder::with_hasher), but instead of using a concrete hasher
     /// builder, the provided function will be called as many times as necessary to initialize
     /// the underlying map.
-    pub fn with_hasher_fn<H>(self, make: fn() -> H) -> Builder<H>
+    ///
+    /// # Safety
+    ///
+    /// See [`crate::with_hasher`](crate::with_hasher).
+    pub unsafe fn with_hasher_fn<H>(self, make: fn() -> H) -> Builder<H>
     where
         H: BuildHasher,
     {
@@ -148,10 +161,23 @@ impl<S> Builder<S> {
     /// ```
     pub fn build<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
     where
-        K: Eq + Hash,
+        K: TrustedHashEq,
         S: BuildHasher,
     {
-        Core::build_map(self)
+        unsafe { self.build_assert_trusted() }
+    }
+
+    /// Consumes the builder and returns a write handle and read handle to the map.
+    ///
+    /// # Safety
+    ///
+    /// The implementations of `Hash` and `Eq` for the key type **must** be deterministic.
+    pub unsafe fn build_assert_trusted<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        unsafe { Core::build_map(self) }
     }
 
     pub(crate) fn into_args(self) -> BuilderArgs<S> {
