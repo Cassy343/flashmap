@@ -18,12 +18,11 @@ use crate::{
     },
     util::{likely, lock, Alias},
 };
-use crate::{util::CachePadded, Map, ReadHandle, WriteHandle};
-use crate::{Builder, BuilderArgs};
+use crate::{util::CachePadded, BuilderArgs, Map, ReadHandle, WriteHandle};
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 use std::process::abort;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 
 pub struct Core<K, V, S = DefaultHashBuilder> {
     residual: AtomicIsize,
@@ -42,19 +41,17 @@ where
     K: Eq + Hash,
     S: BuildHasher,
 {
-    pub unsafe fn build_map(options: Builder<S>) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
-        let BuilderArgs { capacity, h1, h2 } = options.into_args();
+    pub(crate) unsafe fn build_map(
+        args: BuilderArgs<S>,
+    ) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>) {
+        let BuilderArgs { capacity, h1, h2 } = args;
 
         let maps = Box::new([
             CachePadded::new(UnsafeCell::new(Map::with_capacity_and_hasher(capacity, h1))),
             CachePadded::new(UnsafeCell::new(Map::with_capacity_and_hasher(capacity, h2))),
         ]);
 
-        #[cfg(not(miri))]
-        let init_refcount_capacity = num_cpus::get();
-
-        #[cfg(miri)]
-        let init_refcount_capacity = 1;
+        let init_refcount_capacity = if cfg!(not(miri)) { num_cpus::get() } else { 1 };
 
         let me = Arc::new(Self {
             residual: AtomicIsize::new(0),
@@ -65,7 +62,7 @@ where
             _not_send_sync: PhantomData,
         });
 
-        let write_handle = WriteHandle::new(Arc::clone(&me));
+        let write_handle = unsafe { WriteHandle::new(Arc::clone(&me)) };
         let read_handle = Self::new_reader(me);
 
         (write_handle, read_handle)
@@ -94,7 +91,8 @@ impl<K, V, S> Core<K, V, S> {
     pub unsafe fn release_residual(&self) {
         let last_residual = self.residual.fetch_sub(1, Ordering::AcqRel);
 
-        // If we were not the last residual reader, we do nothing.
+        // If we were not the last residual reader, or the writer is not currently waiting for the
+        // last reader, we do nothing.
         if last_residual != isize::MIN + 1 {
             return;
         }
@@ -111,7 +109,7 @@ impl<K, V, S> Core<K, V, S> {
             None => {
                 #[cfg(debug_assertions)]
                 {
-                    unreachable!("WAITING_ON_READERS state observed when writer_thread is None");
+                    unreachable!("Writer is waiting on readers but writer_thread is None");
                 }
 
                 #[cfg(not(debug_assertions))]
@@ -128,10 +126,7 @@ impl<K, V, S> Core<K, V, S> {
 
         if residual != 0 {
             let current = Some(thread::current());
-            let old = self
-                .writer_thread
-                .with_mut(|ptr| unsafe { ptr::replace(ptr, current) });
-            drop(old);
+            self.writer_thread.with_mut(|ptr| unsafe { *ptr = current });
 
             let latest_residual = self.residual.fetch_add(isize::MIN, Ordering::AcqRel);
 
@@ -162,12 +157,12 @@ impl<K, V, S> Core<K, V, S> {
     pub unsafe fn finish_write(&self) {
         debug_assert_eq!(self.residual.load(Ordering::Relaxed), 0);
 
+        fence(Ordering::Release);
+
         let guard = lock(&self.refcounts);
 
         // This needs to be within the mutex
         self.writer_map.set(self.writer_map.get().other());
-
-        fence(Ordering::Release);
 
         let mut initial_residual = 0isize;
 
@@ -185,11 +180,11 @@ impl<K, V, S> Core<K, V, S> {
             }
         }
 
-        fence(Ordering::Acquire);
-
         drop(guard);
 
-        self.residual.fetch_add(initial_residual, Ordering::AcqRel);
+        self.residual.fetch_add(initial_residual, Ordering::Relaxed);
+
+        fence(Ordering::Acquire);
     }
 }
 

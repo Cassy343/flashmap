@@ -3,8 +3,7 @@
 mod util;
 
 use flashmap::Evicted;
-use std::thread;
-use util::dderef;
+use std::{ops::Deref, thread};
 
 #[test]
 pub fn nested_readers() {
@@ -19,15 +18,15 @@ pub fn nested_readers() {
         let outer = read.guard();
         let forty = outer.get(&20);
         let middle = read.guard();
-        assert!(matches!(forty.map(dderef), Some(40) | None));
+        assert!(matches!(forty.map(Deref::deref), Some(40) | None));
         let inner = read.guard();
         let twenty = middle.get(&10);
-        assert!(matches!(forty.map(dderef), Some(40) | None));
+        assert!(matches!(forty.map(Deref::deref), Some(40) | None));
         drop(outer);
-        assert!(matches!(twenty.map(dderef), Some(20) | None));
+        assert!(matches!(twenty.map(Deref::deref), Some(20) | None));
         assert_eq!(inner.get(&10), twenty);
         drop(inner);
-        assert!(matches!(twenty.map(dderef), Some(20) | None));
+        assert!(matches!(twenty.map(Deref::deref), Some(20) | None));
         drop(middle);
     });
 

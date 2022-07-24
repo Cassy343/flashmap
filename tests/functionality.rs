@@ -6,7 +6,7 @@
 
 mod util;
 
-use util::dderef;
+use std::ops::Deref;
 
 #[test]
 pub fn insert() {
@@ -41,6 +41,10 @@ fn test_empty_iter() {
 
 #[test]
 fn test_lots_of_insertions() {
+    if cfg!(miri) {
+        println!("This test will take a few seconds when run with miri.");
+    }
+
     let (mut write, read) = flashmap::new::<Box<i32>, Box<i32>>();
 
     const MIN: i32 = 0;
@@ -55,11 +59,11 @@ fn test_lots_of_insertions() {
             assert!(write.guard().insert(Box::new(i), Box::new(i)).is_none());
 
             for j in MIN..=i {
-                assert_eq!(read.guard().get(&j).map(dderef), Some(&j));
+                assert_eq!(read.guard().get(&j).map(Deref::deref), Some(&j));
             }
 
             for j in i + 1..MID {
-                assert_eq!(read.guard().get(&j).map(dderef), None);
+                assert_eq!(read.guard().get(&j).map(Deref::deref), None);
             }
         }
 
@@ -116,7 +120,7 @@ fn test_replace() {
         .guard()
         .replace(Box::new(5), |_| Box::new(new))
         .unwrap();
-    assert_eq!(read.guard().get(&5).map(dderef), Some(&new));
+    assert_eq!(read.guard().get(&5).map(Deref::deref), Some(&new));
 }
 
 #[test]

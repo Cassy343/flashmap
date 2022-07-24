@@ -7,11 +7,6 @@ pub use std::{sync, thread};
 
 pub use track_access::*;
 
-#[allow(clippy::borrowed_box)]
-pub fn dderef<T>(x: &Box<T>) -> &T {
-    x
-}
-
 pub fn maybe_loom_model<F>(test: F)
 where
     F: Fn() + Send + Sync + 'static,

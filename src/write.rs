@@ -61,7 +61,7 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub(crate) fn new(core: Arc<Core<K, V, S>>) -> Self {
+    pub(crate) unsafe fn new(core: Arc<Core<K, V, S>>) -> Self {
         Self {
             core,
             operations: UnsafeCell::new(Vec::new()),
@@ -475,10 +475,9 @@ enum RawOperation<K, V> {
 /// value. This also means that you're responsible for manually dropping it. See
 /// [`leak`](crate::Evicted::leak) and [`Leaked`](crate::Leaked) for more information.
 pub struct Evicted<'a, K, V> {
-    value: Alias<V>,
+    leaked: Leaked<V>,
     operations: &'a UnsafeCell<Vec<Operation<K, V>>>,
     operation: usize,
-    handle_uid: WriterUid,
 }
 
 impl<'a, K, V> Evicted<'a, K, V> {
@@ -492,10 +491,12 @@ impl<'a, K, V> Evicted<'a, K, V> {
         let operation = operations.with(|ops_ptr| unsafe { &*ops_ptr }.len() - 1);
 
         Self {
-            value,
+            leaked: Leaked {
+                value,
+                handle_uid: guard.handle_uid,
+            },
             operations,
             operation,
-            handle_uid: guard.handle_uid,
         }
     }
 
@@ -534,16 +535,12 @@ impl<'a, K, V> Evicted<'a, K, V> {
     /// // Lazily drop another
     /// write.guard().drop_lazily(b);
     /// ```
-    #[must_use = "Not using a leaked value may cause a memory leak"]
     pub fn leak(evicted: Self) -> Leaked<V> {
         evicted
             .operations
             .with_mut(|ptr| unsafe { (*ptr).get_unchecked_mut(evicted.operation) }.make_leaky());
 
-        Leaked {
-            value: evicted.value,
-            handle_uid: evicted.handle_uid,
-        }
+        evicted.leaked
     }
 }
 
@@ -551,7 +548,7 @@ impl<K, V> Deref for Evicted<'_, K, V> {
     type Target = V;
 
     fn deref(&self) -> &Self::Target {
-        &self.value
+        &self.leaked
     }
 }
 
@@ -564,6 +561,7 @@ impl<K, V> Deref for Evicted<'_, K, V> {
 /// value is not dropped if the wrapper is dropped. See [`leak`](crate::Evicted::leak) for how to
 /// safely drop or take ownership of a leaked value. See [`into_inner`](crate::Leaked::into_inner)
 /// for details on how to unsafely take ownership of a leaked value.
+#[must_use = "Not using a leaked value may cause a memory leak"]
 pub struct Leaked<V> {
     value: Alias<V>,
     handle_uid: WriterUid,

@@ -84,7 +84,7 @@ impl<S> Debug for Builder<S> {
 
 impl Builder<RandomState> {
     /// Creates a new builder with a [`RandomState`](std::collections::hash_map::RandomState)
-    /// hasher.
+    /// hasher, and an initial capacity of zero.
     pub fn new() -> Self {
         Self {
             capacity: 0,
@@ -135,13 +135,13 @@ impl<S> Builder<S> {
     /// # Safety
     ///
     /// See [`crate::with_hasher`](crate::with_hasher).
-    pub unsafe fn with_hasher_fn<H>(self, make: fn() -> H) -> Builder<H>
+    pub unsafe fn with_hasher_generator<H>(self, gen: fn() -> H) -> Builder<H>
     where
         H: BuildHasher,
     {
         Builder {
             capacity: self.capacity,
-            hasher: HasherGen::MakeOne(make),
+            hasher: HasherGen::Generate(gen),
         }
     }
 
@@ -171,13 +171,14 @@ impl<S> Builder<S> {
     ///
     /// # Safety
     ///
-    /// The implementations of `Hash` and `Eq` for the key type **must** be deterministic.
+    /// The implementations of `Hash` and `Eq` for the key type **must** be deterministic. See
+    /// [`TrustedHashEq`](crate::TrustedHashEq) for details.
     pub unsafe fn build_assert_trusted<K, V>(self) -> (WriteHandle<K, V, S>, ReadHandle<K, V, S>)
     where
         K: Hash + Eq,
         S: BuildHasher,
     {
-        unsafe { Core::build_map(self) }
+        unsafe { Core::build_map(self.into_args()) }
     }
 
     pub(crate) fn into_args(self) -> BuilderArgs<S> {
@@ -192,7 +193,7 @@ impl<S> Builder<S> {
 
 #[derive(Clone, Copy)]
 enum HasherGen<S> {
-    MakeOne(fn() -> S),
+    Generate(fn() -> S),
     MakeBoth(fn() -> (S, S)),
     Clone(S, fn(&S) -> S),
 }
@@ -200,7 +201,7 @@ enum HasherGen<S> {
 impl<S> HasherGen<S> {
     fn generate(self) -> (S, S) {
         match self {
-            Self::MakeOne(make) => (make(), make()),
+            Self::Generate(gen) => (gen(), gen()),
             Self::MakeBoth(make_both) => make_both(),
             Self::Clone(hasher, clone) => (clone(&hasher), hasher),
         }
