@@ -2,5 +2,5 @@
 
 set -e
 
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo +nightly fmt --all -- --check
+cargo +nightly clippy --all-targets --all-features -- -D warnings
