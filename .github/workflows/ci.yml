@@ -57,3 +57,30 @@ jobs:
         env:
           RUSTFLAGS: "--cfg loom"
           RUST_BACKTRACE: "full"
+  build-stable:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+        - uses: actions/checkout@v1
+        - uses: actions-rs/toolchain@v1
+          with:
+            toolchain: stable
+            override: true
+            profile: minimal
+        - run: cargo build
+        - run: cargo build --release
+  build-nightly:
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v1
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          profile: minimal
+      - run: cargo build --features nightly
+      - run: cargo build --release --features nightly
+
