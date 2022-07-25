@@ -71,7 +71,9 @@ impl<K, V, S> SharedMapAccess<K, V, S> {
         let maps = unsafe { self.maps.as_ref() };
         &maps[map_index as usize]
     }
+}
 
+impl<K, V, S> Clone for SharedMapAccess<K, V, S> {
     fn clone(&self) -> Self {
         Self { maps: self.maps }
     }

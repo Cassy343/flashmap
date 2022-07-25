@@ -145,9 +145,9 @@ count to 0 and then `unpark` the writing thread.
 
 ## The Write Algorithm
 
-The write algorithm is split into two parts: `synchronize` + start write, and `finish_write`. When
+The write algorithm is split into two parts: `synchronize` + start write, and `publish`. When
 a new write guard is created, `start_write` is called, and when that guard is dropped
-`finish_write` is called.
+`publish` is called.
 
 `synchronize` + start write:
 1. If there are no residual readers, we are done.
@@ -155,10 +155,10 @@ a new write guard is created, `start_write` is called, and when that guard is dr
 3. Once unblocked, obtain a reference to the writable map.
 4. Apply changes from previous write.
 
-After these steps but before `finish_write`, the changes to the writable map are made and stored in
+After these steps but before `publish`, the changes to the writable map are made and stored in
 the operation log.
 
-`finish_write`:
+`publish`:
 1. Acquire the lock on the refcount array.
 2. Swap out the value of the field storing the writable map with the old map.
 3. Call `swap_maps` on each refcount in the array, and (non-atomically) accumulate a sum of the
@@ -171,7 +171,7 @@ the operation log.
 
 Note that read handles are not swapped to the new map at the same time, this is done one-by-one.
 
-An important invariant of this algorithm is that `residual == 0` whenever `finish_write` is called.
+An important invariant of this algorithm is that `residual == 0` whenever `publish` is called.
 That way, either the writing thread will see `residual == 0` after swapping all the maps, or one
 of the residual readers will see `residual & isize::MAX == 1` as the old value when it performs its
 atomic decrement. In either case, this provides a definite signal that there are no more readers

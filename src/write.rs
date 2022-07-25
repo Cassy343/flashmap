@@ -409,7 +409,7 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        unsafe { self.handle.core.finish_write() };
+        unsafe { self.handle.core.publish() };
     }
 }
 
@@ -566,6 +566,9 @@ pub struct Leaked<V> {
     value: Alias<V>,
     handle_uid: WriterUid,
 }
+
+unsafe impl<V> Send for Leaked<V> where V: Send {}
+unsafe impl<V> Sync for Leaked<V> where V: Sync {}
 
 impl<V> Leaked<V> {
     /// Consumes this leaked value, providing the inner aliased value. Note that the aliased value

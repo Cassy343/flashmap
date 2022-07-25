@@ -32,8 +32,15 @@ pub struct Core<K, V, S = DefaultHashBuilder> {
     writer_thread: UnsafeCell<Option<Thread>>,
     writer_map: Cell<MapIndex>,
     maps: OwnedMapAccess<K, V, S>,
-    // TODO: figure out if core can implement send or sync
-    _not_send_sync: PhantomData<*const u8>,
+    _not_sync: PhantomData<*const u8>,
+}
+
+unsafe impl<K, V, S> Send for Core<K, V, S>
+where
+    Alias<K>: Send,
+    Alias<V>: Send,
+    S: Send,
+{
 }
 
 impl<K, V, S> Core<K, V, S>
@@ -59,7 +66,7 @@ where
             writer_thread: UnsafeCell::new(None),
             writer_map: Cell::new(MapIndex::Second),
             maps: OwnedMapAccess::new(maps),
-            _not_send_sync: PhantomData,
+            _not_sync: PhantomData,
         });
 
         let write_handle = unsafe { WriteHandle::new(Arc::clone(&me)) };
@@ -154,7 +161,7 @@ impl<K, V, S> Core<K, V, S> {
     }
 
     #[inline]
-    pub unsafe fn finish_write(&self) {
+    pub unsafe fn publish(&self) {
         debug_assert_eq!(self.residual.load(Ordering::Relaxed), 0);
 
         fence(Ordering::Release);

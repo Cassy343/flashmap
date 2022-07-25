@@ -213,3 +213,76 @@ pub(crate) struct BuilderArgs<S> {
     pub h1: S,
     pub h2: S,
 }
+
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// use flashmap::*;
+/// assert_send::<Evicted<'_, (), ()>>();
+/// ```
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// use flashmap::*;
+/// assert_send::<Alias<std::cell::Cell<()>>>();
+/// ```
+#[allow(dead_code)]
+struct NotSendTypes;
+
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// use flashmap::*;
+/// assert_sync::<Evicted<'_, (), ()>>();
+/// ```
+///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// use flashmap::*;
+/// assert_sync::<Alias<std::sync::MutexGuard<'_, ()>>>();
+/// ```
+#[allow(dead_code)]
+struct NotSyncTypes;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::hash_map::DefaultHasher, marker::PhantomData};
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+
+    #[derive(PartialEq, Eq, Hash)]
+    struct SendOnly(PhantomData<*const u8>);
+
+    unsafe impl Send for SendOnly {}
+
+    #[derive(PartialEq, Eq, Hash)]
+    struct SyncOnly(PhantomData<*const u8>);
+
+    unsafe impl Sync for SyncOnly {}
+
+    #[derive(PartialEq, Eq, Hash)]
+    struct SendSync;
+
+    impl BuildHasher for SendSync {
+        type Hasher = DefaultHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn send_types() {
+        assert_send::<ReadHandle<SendSync, SendSync, SendSync>>();
+        assert_send::<WriteHandle<SendSync, SendSync, SendSync>>();
+        assert_send::<View<ReadGuard<'_, SendSync, SendSync, SendSync>>>();
+        assert_send::<Leaked<SendOnly>>();
+    }
+
+    #[test]
+    fn sync_types() {
+        assert_sync::<ReadHandle<SendSync, SendSync, SendSync>>();
+        assert_sync::<View<ReadGuard<'_, SendSync, SendSync, SendSync>>>();
+        assert_sync::<Leaked<SyncOnly>>();
+    }
+}
