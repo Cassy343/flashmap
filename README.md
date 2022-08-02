@@ -5,7 +5,7 @@ cheap as reading from an `Arc<HashMap<K, V>>`. Moreover, writes (when executed f
 only) will effectively be wait-free if performed sufficiently infrequently, and readers do not hold
 onto guards for extended periods of time.
 
-The trade-offs for extremely cheap reads are that a write can only be exectued from one thread at a
+The trade-offs for extremely cheap reads are that a write can only be executed from one thread at a
 time, and eventual consistency. In other words, when a write is performed, all reading threads will
 only observe the write once they complete their last read and begin a new one.
 
