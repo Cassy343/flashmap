@@ -9,7 +9,7 @@ repository = "https://github.com/Cassy343/flashmap"
 license = "MIT"
 readme = "README.md"
 
-keywords = ["map", "concurrent", "hashamp"]
+keywords = ["map", "concurrent", "hashmap"]
 categories = ["concurrency", "data-structures"]
 
 [dependencies]
