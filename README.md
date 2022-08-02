@@ -15,7 +15,8 @@ The underlying algorithm used here is, in principle, the same as that used by
 [`evmap`](https://crates.io/crates/evmap). However the implementation of that algorithm has been
 modified to **significantly** improve reader performance, at the cost of some necessary API
 changes and a different performance profile for the writer. More information on the implementation
-details of the algorithm can be found in the `algorithm` module.
+details of the algorithm can be found in the `algorithm` module, whose contents can also be found
+[here](https://github.com/Cassy343/flashmap/blob/master/algorithm.md) on github.
 
 # When to use `flashmap`
 
