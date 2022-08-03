@@ -126,6 +126,10 @@ where
     /// ```
     pub fn guard(&mut self) -> View<WriteGuard<'_, K, V, S>> {
         self.synchronize();
+        unsafe { self.guard_unchecked() }
+    }
+
+    unsafe fn guard_unchecked(&mut self) -> View<WriteGuard<'_, K, V, S>> {
         let map = self.core.writer_map();
         map.with_mut(|map_ptr| {
             self.operations.with_mut(|ops_ptr| {
@@ -210,6 +214,10 @@ where
     #[inline]
     pub fn reclaimer(&self) -> impl Fn(Leaked<V>) -> V + '_ {
         self.synchronize();
+        unsafe { self.reclaimer_unchecked() }
+    }
+
+    unsafe fn reclaimer_unchecked(&self) -> impl Fn(Leaked<V>) -> V + '_ {
         let uid = self.uid;
         move |leaked| {
             assert!(uid == leaked.handle_uid, "{LEAKED_VALUE_MISMATCH}");
@@ -217,8 +225,16 @@ where
         }
     }
 
+    #[cfg(feature = "async")]
+    pub fn into_async(self) -> AsyncWriteHandle<K, V, S> {
+        AsyncWriteHandle { inner: self }
+    }
+
     #[inline]
-    unsafe fn flush_operations(operations: &mut Vec<Operation<K, V>>, map: &mut Map<K, V, S>) {
+    pub(crate) unsafe fn flush_operations(
+        operations: &mut Vec<Operation<K, V>>,
+        map: &mut Map<K, V, S>,
+    ) {
         // We do unchecked ops in here since this function benches pretty hot when doing a lot
         // of writing
 
@@ -261,13 +277,9 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        self.synchronize();
-        let map = self.core.writer_map();
-        map.with_mut(|map_ptr| {
-            self.operations.with_mut(|ops_ptr| unsafe {
-                Self::flush_operations(&mut *ops_ptr, &mut *map_ptr)
-            });
-        });
+        let operations =
+            mem::replace(&mut self.operations, UnsafeCell::new(Vec::new())).into_inner();
+        unsafe { self.core.replay_on_drop(operations) };
     }
 }
 
@@ -413,7 +425,7 @@ where
     }
 }
 
-struct Operation<K, V> {
+pub(crate) struct Operation<K, V> {
     raw: RawOperation<K, V>,
     leaky: bool,
 }
@@ -614,5 +626,54 @@ impl<V> Deref for Leaked<V> {
 
     fn deref(&self) -> &Self::Target {
         &self.value
+    }
+}
+
+#[cfg(feature = "async")]
+pub use async_handle::*;
+
+#[cfg(feature = "async")]
+mod async_handle {
+    use super::*;
+    use crate::Synchronize;
+
+    pub struct AsyncWriteHandle<K, V, S = RandomState>
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        pub(super) inner: WriteHandle<K, V, S>,
+    }
+
+    impl<K, V, S> AsyncWriteHandle<K, V, S>
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        #[inline]
+        pub fn synchronize(&self) -> Synchronize<'_> {
+            self.inner.core.synchronize_fut()
+        }
+
+        #[inline]
+        pub async fn guard(&mut self) -> View<WriteGuard<'_, K, V, S>> {
+            self.synchronize().await;
+            unsafe { self.inner.guard_unchecked() }
+        }
+
+        #[inline]
+        pub async fn reclaim_one(&self, leaked: Leaked<V>) -> V {
+            (self.reclaimer().await)(leaked)
+        }
+
+        #[inline]
+        pub async fn reclaimer(&self) -> impl Fn(Leaked<V>) -> V + '_ {
+            self.synchronize().await;
+            unsafe { self.inner.reclaimer_unchecked() }
+        }
+
+        pub fn into_sync(self) -> WriteHandle<K, V, S> {
+            self.inner
+        }
     }
 }

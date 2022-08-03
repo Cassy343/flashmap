@@ -18,7 +18,6 @@ pub mod cell {
         ops::{Deref, DerefMut},
     };
 
-    #[allow(dead_code)]
     pub struct MutPtr<'a, T: ?Sized> {
         mut_ptr: loom::cell::MutPtr<T>,
         _lifetime: PhantomData<&'a ()>,
@@ -52,11 +51,15 @@ pub mod cell {
                 inner: loom::cell::UnsafeCell::new(value),
             }
         }
+
+        #[inline(always)]
+        pub fn into_inner(self) -> T {
+            self.inner.into_inner()
+        }
     }
 
     impl<T: ?Sized> UnsafeCell<T> {
         #[inline(always)]
-        #[allow(dead_code)]
         pub fn get_mut(&mut self) -> MutPtr<'_, T> {
             MutPtr {
                 mut_ptr: self.inner.get_mut(),
@@ -90,7 +93,6 @@ pub mod cell {
         ops::{Deref, DerefMut},
     };
 
-    #[allow(dead_code)]
     pub struct MutPtr<'a, T: ?Sized> {
         mut_ptr: &'a mut T,
     }
@@ -123,11 +125,15 @@ pub mod cell {
                 inner: StdUnsafeCell::new(value),
             }
         }
+
+        #[inline(always)]
+        pub fn into_inner(self) -> T {
+            self.inner.into_inner()
+        }
     }
 
     impl<T: ?Sized> UnsafeCell<T> {
         #[inline(always)]
-        #[allow(dead_code)]
         pub fn get_mut(&mut self) -> MutPtr<'_, T> {
             MutPtr {
                 mut_ptr: self.inner.get_mut(),

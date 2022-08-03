@@ -10,6 +10,8 @@ mod util;
 mod view;
 mod write;
 
+#[cfg(feature = "async")]
+pub use self::core::Synchronize;
 pub use read::*;
 pub(crate) use util::loom;
 pub use util::{deterministic::*, Alias};
@@ -34,6 +36,14 @@ where
     K: TrustedHashEq,
 {
     Builder::new().build()
+}
+
+#[cfg(feature = "async")]
+pub fn new_async<K, V>() -> (AsyncWriteHandle<K, V>, ReadHandle<K, V>)
+where
+    K: TrustedHashEq,
+{
+    Builder::new().build_async()
 }
 
 /// Creates a new map with the specified initial capacity and a
@@ -167,6 +177,15 @@ impl<S> Builder<S> {
         unsafe { self.build_assert_trusted() }
     }
 
+    #[cfg(feature = "async")]
+    pub fn build_async<K, V>(self) -> (AsyncWriteHandle<K, V, S>, ReadHandle<K, V, S>)
+    where
+        K: TrustedHashEq,
+        S: BuildHasher,
+    {
+        unsafe { self.build_async_assert_trusted() }
+    }
+
     /// Consumes the builder and returns a write handle and read handle to the map.
     ///
     /// # Safety
@@ -179,6 +198,18 @@ impl<S> Builder<S> {
         S: BuildHasher,
     {
         unsafe { Core::build_map(self.into_args()) }
+    }
+
+    #[cfg(feature = "async")]
+    pub unsafe fn build_async_assert_trusted<K, V>(
+        self,
+    ) -> (AsyncWriteHandle<K, V, S>, ReadHandle<K, V, S>)
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        let (write, read) = unsafe { self.build_assert_trusted() };
+        (write.into_async(), read)
     }
 
     pub(crate) fn into_args(self) -> BuilderArgs<S> {

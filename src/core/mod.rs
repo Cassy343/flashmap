@@ -4,7 +4,6 @@ mod store;
 pub use refcount::*;
 pub use store::*;
 
-use hashbrown::hash_map::DefaultHashBuilder;
 use slab::Slab;
 
 use crate::{
@@ -17,29 +16,48 @@ use crate::{
         thread::{self, Thread},
     },
     util::{likely, lock, Alias},
+    Operation,
 };
 use crate::{util::CachePadded, BuilderArgs, Map, ReadHandle, WriteHandle};
-use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 use std::process::abort;
 use std::ptr::NonNull;
+use std::{
+    collections::hash_map::RandomState,
+    hash::{BuildHasher, Hash},
+};
 
-pub struct Core<K, V, S = DefaultHashBuilder> {
+#[cfg(feature = "async")]
+use atomic_waker::AtomicWaker;
+#[cfg(feature = "async")]
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
+
+pub struct Core<K, V, S = RandomState>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
     residual: AtomicIsize,
     // All readers need to be dropped before we're dropped, so we don't need to worry about
     // freeing any refcounts.
     refcounts: Mutex<Slab<NonNull<RefCount>>>,
-    writer_thread: UnsafeCell<Option<Thread>>,
+    parker: UnsafeCell<Parker>,
     writer_map: Cell<MapIndex>,
     maps: OwnedMapAccess<K, V, S>,
+    replay_on_drop: UnsafeCell<Vec<Operation<K, V>>>,
     _not_sync: PhantomData<*const u8>,
 }
 
 unsafe impl<K, V, S> Send for Core<K, V, S>
 where
+    K: Hash + Eq,
     Alias<K>: Send,
     Alias<V>: Send,
-    S: Send,
+    S: BuildHasher + Send,
 {
 }
 
@@ -63,9 +81,10 @@ where
         let me = Arc::new(Self {
             residual: AtomicIsize::new(0),
             refcounts: Mutex::new(Slab::with_capacity(init_refcount_capacity)),
-            writer_thread: UnsafeCell::new(None),
+            parker: UnsafeCell::new(Parker::None),
             writer_map: Cell::new(MapIndex::Second),
             maps: OwnedMapAccess::new(maps),
+            replay_on_drop: UnsafeCell::new(Vec::new()),
             _not_sync: PhantomData,
         });
 
@@ -74,9 +93,7 @@ where
 
         (write_handle, read_handle)
     }
-}
 
-impl<K, V, S> Core<K, V, S> {
     pub fn new_reader(me: Arc<Self>) -> ReadHandle<K, V, S> {
         let mut guard = lock(&me.refcounts);
         let refcount = RefCount::new(me.writer_map.get().other());
@@ -108,23 +125,7 @@ impl<K, V, S> Core<K, V, S> {
 
         // Since we were the last reader, and the writer was waiting on us, it's our job to wake it
         // up.
-        self.writer_thread.with(|ptr| match unsafe { &*ptr } {
-            Some(thread) => thread.unpark(),
-            // This branch is entirely unreachable (assuming this library is coded correctly),
-            // however I'd like to keep the additional code around reading as small as possible,
-            // so in release mode we currently do nothing on this branch.
-            None => {
-                #[cfg(debug_assertions)]
-                {
-                    unreachable!("Writer is waiting on readers but writer_thread is None");
-                }
-
-                #[cfg(not(debug_assertions))]
-                {
-                    crate::util::cold();
-                }
-            }
-        });
+        self.parker.with(|ptr| unsafe { &*ptr }.unpark());
     }
 
     #[inline]
@@ -132,8 +133,9 @@ impl<K, V, S> Core<K, V, S> {
         let residual = self.residual.load(Ordering::Acquire);
 
         if residual != 0 {
-            let current = Some(thread::current());
-            self.writer_thread.with_mut(|ptr| unsafe { *ptr = current });
+            let current = thread::current();
+            self.parker
+                .with_mut(|ptr| unsafe { &mut *ptr }.write_sync(current));
 
             let latest_residual = self.residual.fetch_add(isize::MIN, Ordering::AcqRel);
 
@@ -153,6 +155,12 @@ impl<K, V, S> Core<K, V, S> {
                 self.residual.store(0, Ordering::Release);
             }
         }
+    }
+
+    #[cfg(feature = "async")]
+    #[inline]
+    pub fn synchronize_fut(&self) -> Synchronize<'_> {
+        Synchronize::new(&self.residual, &self.parker)
     }
 
     #[inline]
@@ -193,16 +201,162 @@ impl<K, V, S> Core<K, V, S> {
 
         fence(Ordering::Acquire);
     }
+
+    pub(crate) unsafe fn replay_on_drop(&self, operations: Vec<Operation<K, V>>) {
+        self.replay_on_drop
+            .with_mut(|ptr| unsafe { *ptr = operations });
+    }
 }
 
-impl<K, V, S> Drop for Core<K, V, S> {
+impl<K, V, S> Drop for Core<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
     fn drop(&mut self) {
-        let reader_map_index = self.writer_map.get().other();
+        let writer_map_index = self.writer_map.get();
+
+        self.maps.get(writer_map_index).with_mut(|ptr| unsafe {
+            WriteHandle::flush_operations(&mut *self.replay_on_drop.get_mut(), &mut *ptr)
+        });
+
+        let reader_map_index = writer_map_index.other();
         self.maps.get(reader_map_index).with_mut(|ptr| unsafe {
             (*ptr).drain().for_each(|(ref mut key, ref mut value)| {
                 Alias::drop(key);
                 Alias::drop(value);
             });
         });
+    }
+}
+
+enum Parker {
+    Sync(Thread),
+    #[cfg(feature = "async")]
+    Async(AtomicWaker),
+    None,
+}
+
+impl Parker {
+    #[inline]
+    fn write_sync(&mut self, thread: Thread) {
+        *self = Self::Sync(thread);
+    }
+
+    #[cfg(feature = "async")]
+    #[inline]
+    fn write_async(&mut self, waker: &Waker) {
+        match self {
+            Self::Async(atomic_waker) => atomic_waker.register(waker),
+            _ => {
+                let atomic_waker = AtomicWaker::new();
+                atomic_waker.register(waker);
+                *self = Self::Async(atomic_waker);
+            }
+        }
+    }
+
+    #[cfg(feature = "async")]
+    #[inline]
+    fn update_async(&self, waker: &Waker) {
+        match self {
+            Self::Async(atomic_waker) => atomic_waker.register(waker),
+            _ => {
+                #[cfg(debug_assertions)]
+                {
+                    unreachable!("Attempted to update waker without one already in place");
+                }
+
+                #[cfg(not(debug_assertions))]
+                {
+                    crate::util::cold();
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn unpark(&self) {
+        match self {
+            Self::Sync(thread) => thread.unpark(),
+            #[cfg(feature = "async")]
+            Self::Async(waker) => waker.wake(),
+            // This branch is entirely unreachable (assuming this library is coded correctly),
+            // however I'd like to keep the additional code around reading as small as possible,
+            // so in release mode we currently do nothing on this branch.
+            Self::None => {
+                #[cfg(debug_assertions)]
+                {
+                    unreachable!("Writer is waiting on readers but parker is None");
+                }
+
+                #[cfg(not(debug_assertions))]
+                {
+                    crate::util::cold();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+pub use async_synchronize::*;
+
+#[cfg(feature = "async")]
+mod async_synchronize {
+    use super::*;
+
+    pub struct Synchronize<'a> {
+        residual: &'a AtomicIsize,
+        parker: &'a UnsafeCell<Parker>,
+        waiting: bool,
+    }
+
+    impl<'a> Synchronize<'a> {
+        #[inline]
+        pub(super) fn new(residual: &'a AtomicIsize, parker: &'a UnsafeCell<Parker>) -> Self {
+            Self {
+                residual,
+                parker,
+                waiting: false,
+            }
+        }
+    }
+
+    impl Future for Synchronize<'_> {
+        type Output = ();
+
+        #[inline]
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let residual = self.residual.load(Ordering::Acquire);
+
+            if self.waiting {
+                self.parker
+                    .with(|ptr| unsafe { &*ptr }.update_async(cx.waker()));
+
+                if likely(residual == 0) {
+                    Poll::Ready(())
+                } else {
+                    debug_assert!(residual < 0);
+                    Poll::Pending
+                }
+            } else {
+                if residual != 0 {
+                    self.parker
+                        .with_mut(|ptr| unsafe { &mut *ptr }.write_async(cx.waker()));
+
+                    let latest_residual = self.residual.fetch_add(isize::MIN, Ordering::AcqRel);
+
+                    if likely(latest_residual != 0) {
+                        self.as_mut().waiting = true;
+                        return Poll::Pending;
+                    } else {
+                        self.residual.store(0, Ordering::Release);
+                    }
+                }
+
+                Poll::Ready(())
+            }
+        }
     }
 }

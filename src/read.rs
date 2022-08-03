@@ -1,5 +1,3 @@
-use std::{collections::hash_map::RandomState, ptr::NonNull};
-
 use crate::{
     core::{Core, MapIndex, RefCount, SharedMapAccess},
     loom::cell::UnsafeCell,
@@ -8,12 +6,18 @@ use crate::{
     view::sealed::ReadAccess,
     Map, View,
 };
+use std::hash::{BuildHasher, Hash};
+use std::{collections::hash_map::RandomState, ptr::NonNull};
 
 /// A read handle for the map.
 ///
 /// This type allows for the creation of [`ReadGuard`s](crate::ReadGuard), which provide immutable
 /// access to the underlying data.
-pub struct ReadHandle<K, V, S = RandomState> {
+pub struct ReadHandle<K, V, S = RandomState>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     core: Arc<Core<K, V, S>>,
     map_access: SharedMapAccess<K, V, S>,
     refcount: NonNull<RefCount>,
@@ -22,20 +26,24 @@ pub struct ReadHandle<K, V, S = RandomState> {
 
 unsafe impl<K, V, S> Send for ReadHandle<K, V, S>
 where
-    K: Send + Sync,
+    K: Send + Sync + Eq + Hash,
     V: Send + Sync,
-    S: Send + Sync,
+    S: Send + Sync + BuildHasher,
 {
 }
 unsafe impl<K, V, S> Sync for ReadHandle<K, V, S>
 where
-    K: Send + Sync,
+    K: Send + Sync + Eq + Hash,
     V: Send + Sync,
-    S: Send + Sync,
+    S: Send + Sync + BuildHasher,
 {
 }
 
-impl<K, V, S> ReadHandle<K, V, S> {
+impl<K, V, S> ReadHandle<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     pub(crate) fn new(
         core: Arc<Core<K, V, S>>,
         map_access: SharedMapAccess<K, V, S>,
@@ -104,13 +112,21 @@ impl<K, V, S> ReadHandle<K, V, S> {
     }
 }
 
-impl<K, V, S> Clone for ReadHandle<K, V, S> {
+impl<K, V, S> Clone for ReadHandle<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     fn clone(&self) -> Self {
         Core::new_reader(Arc::clone(&self.core))
     }
 }
 
-impl<K, V, S> Drop for ReadHandle<K, V, S> {
+impl<K, V, S> Drop for ReadHandle<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     fn drop(&mut self) {
         unsafe { self.core.release_refcount(self.refcount_key) };
     }
@@ -122,7 +138,11 @@ impl<K, V, S> Drop for ReadHandle<K, V, S> {
 /// be created in order to see updates from the writer. See
 /// [`ReadHandle::guard`](crate::ReadHandle::guard) for examples. See [`View`](crate::View) for
 /// additional examples and the public API to interact with the underlying map.
-pub struct ReadGuard<'guard, K, V, S = RandomState> {
+pub struct ReadGuard<'guard, K, V, S = RandomState>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     handle: &'guard ReadHandle<K, V, S>,
     map: &'guard UnsafeCell<Map<K, V, S>>,
     map_index: MapIndex,
@@ -130,20 +150,24 @@ pub struct ReadGuard<'guard, K, V, S = RandomState> {
 
 unsafe impl<K, V, S> Send for ReadGuard<'_, K, V, S>
 where
-    K: Send + Sync,
+    K: Send + Sync + Eq + Hash,
     V: Send + Sync,
-    S: Send + Sync,
+    S: Send + Sync + BuildHasher,
 {
 }
 unsafe impl<K, V, S> Sync for ReadGuard<'_, K, V, S>
 where
-    K: Send + Sync,
+    K: Send + Sync + Eq + Hash,
     V: Send + Sync,
-    S: Send + Sync,
+    S: Send + Sync + BuildHasher,
 {
 }
 
-impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
+impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     type Map = Map<K, V, S>;
 
     #[inline]
@@ -155,7 +179,11 @@ impl<'guard, K, V, S> ReadAccess for ReadGuard<'guard, K, V, S> {
     }
 }
 
-impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S> {
+impl<'guard, K, V, S> Drop for ReadGuard<'guard, K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+{
     #[inline]
     fn drop(&mut self) {
         let current_reader_map = unsafe { self.handle.refcount.as_ref() }.decrement();
