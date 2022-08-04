@@ -81,7 +81,7 @@ where
         let me = Arc::new(Self {
             residual: AtomicIsize::new(0),
             refcounts: Mutex::new(Slab::with_capacity(init_refcount_capacity)),
-            parker: UnsafeCell::new(Parker::None),
+            parker: UnsafeCell::new(Parker::new()),
             writer_map: Cell::new(MapIndex::Second),
             maps: OwnedMapAccess::new(maps),
             replay_on_drop: UnsafeCell::new(Vec::new()),
@@ -234,10 +234,23 @@ enum Parker {
     Sync(Thread),
     #[cfg(feature = "async")]
     Async(AtomicWaker),
+    #[cfg(not(feature = "async"))]
     None,
 }
 
 impl Parker {
+    fn new() -> Self {
+        #[cfg(feature = "async")]
+        {
+            Self::Async(AtomicWaker::new())
+        }
+
+        #[cfg(not(feature = "async"))]
+        {
+            Self::None
+        }
+    }
+
     #[inline]
     fn write_sync(&mut self, thread: Thread) {
         *self = Self::Sync(thread);
@@ -249,6 +262,8 @@ impl Parker {
         match self {
             Self::Async(atomic_waker) => atomic_waker.register(waker),
             _ => {
+                crate::util::cold();
+
                 let atomic_waker = AtomicWaker::new();
                 atomic_waker.register(waker);
                 *self = Self::Async(atomic_waker);
@@ -261,17 +276,7 @@ impl Parker {
     fn update_async(&self, waker: &Waker) {
         match self {
             Self::Async(atomic_waker) => atomic_waker.register(waker),
-            _ => {
-                #[cfg(debug_assertions)]
-                {
-                    unreachable!("Attempted to update waker without one already in place");
-                }
-
-                #[cfg(not(debug_assertions))]
-                {
-                    crate::util::cold();
-                }
-            }
+            _ => unreachable!("Attempted to update waker without one already in place"),
         }
     }
 
@@ -284,6 +289,7 @@ impl Parker {
             // This branch is entirely unreachable (assuming this library is coded correctly),
             // however I'd like to keep the additional code around reading as small as possible,
             // so in release mode we currently do nothing on this branch.
+            #[cfg(not(feature = "async"))]
             Self::None => {
                 #[cfg(debug_assertions)]
                 {
@@ -328,11 +334,11 @@ mod async_synchronize {
 
         #[inline]
         fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            let residual = self.residual.load(Ordering::Acquire);
-
             if self.waiting {
                 self.parker
                     .with(|ptr| unsafe { &*ptr }.update_async(cx.waker()));
+
+                let residual = self.residual.load(Ordering::Acquire);
 
                 if likely(residual == 0) {
                     Poll::Ready(())
@@ -341,6 +347,8 @@ mod async_synchronize {
                     Poll::Pending
                 }
             } else {
+                let residual = self.residual.load(Ordering::Acquire);
+
                 if residual != 0 {
                     self.parker
                         .with_mut(|ptr| unsafe { &mut *ptr }.write_async(cx.waker()));
