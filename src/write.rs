@@ -538,7 +538,7 @@ impl<'a, K, V> Evicted<'a, K, V> {
     pub fn leak(evicted: Self) -> Leaked<V> {
         evicted
             .operations
-            .with_mut(|ptr| unsafe { (*ptr).get_unchecked_mut(evicted.operation) }.make_leaky());
+            .with_mut(|ptr| unsafe { (&mut (*ptr)).get_unchecked_mut(evicted.operation) }.make_leaky());
 
         evicted.leaked
     }
