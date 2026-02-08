@@ -1,10 +1,12 @@
-//! These are tests that are specifically designed to be run with cfg(loom) to catch concurrency
-//! bugs. Tests which take a long time to run should be gated behind cfg(long_test).
+#![allow(unexpected_cfgs)]
+
+//! These are tests that are specifically designed to be run with cfg(feature = "loom") to catch
+//! concurrency bugs. Tests which take a long time to run should be gated behind cfg(long_test).
 
 mod util;
 
 use flashmap::{Evicted, ReadHandle};
-use util::{thread, TrackAccess};
+use util::{TrackAccess, thread};
 
 trait BoolExt {
     fn implies(self, other: Self) -> Self;
@@ -111,10 +113,12 @@ pub fn many_different_writes() {
                 .guard()
                 .insert(TrackAccess::new(20), TrackAccess::new(40));
 
-            assert!(write
-                .guard()
-                .replace(TrackAccess::new(20), |x| TrackAccess::new(*x.get() + 5))
-                .is_some());
+            assert!(
+                write
+                    .guard()
+                    .replace(TrackAccess::new(20), |x| TrackAccess::new(*x.get() + 5))
+                    .is_some()
+            );
 
             assert!(write.guard().remove(TrackAccess::new(10)).is_some());
         });
@@ -250,9 +254,11 @@ pub fn evicted_and_leaked_values() {
             let forty = read.guard().get(&20).map(|x| *x.get());
             let eighty = read.guard().get(&40).map(|x| *x.get());
 
-            assert!(twenty
-                .is_none()
-                .implies(forty == Some(45) && eighty == Some(90)));
+            assert!(
+                twenty
+                    .is_none()
+                    .implies(forty == Some(45) && eighty == Some(90))
+            );
             assert!((forty == Some(45)).implies(eighty == Some(90)));
         });
 

@@ -4,21 +4,21 @@ mod store;
 pub use refcount::*;
 pub use store::*;
 
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 use slab::Slab;
 
+use crate::{BuilderArgs, Map, ReadHandle, WriteHandle, util::CachePadded};
 use crate::{
     loom::{
         cell::{Cell, UnsafeCell},
         sync::{
-            atomic::{fence, AtomicIsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicIsize, Ordering, fence},
         },
         thread::{self, Thread},
     },
-    util::{likely, lock, Alias},
+    util::{Alias, likely, lock},
 };
-use crate::{util::CachePadded, BuilderArgs, Map, ReadHandle, WriteHandle};
 use std::hash::{BuildHasher, Hash};
 use std::marker::PhantomData;
 use std::process::abort;

@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "nightly", allow(internal_features))]
 #![cfg_attr(feature = "nightly", feature(core_intrinsics))]
 #![deny(rust_2018_idioms, unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
@@ -12,7 +13,7 @@ mod write;
 
 pub use read::*;
 pub(crate) use util::loom;
-pub use util::{deterministic::*, Alias};
+pub use util::{Alias, deterministic::*};
 pub use view::View;
 pub use write::*;
 
@@ -135,13 +136,13 @@ impl<S> Builder<S> {
     /// # Safety
     ///
     /// See [`crate::with_hasher`](crate::with_hasher).
-    pub unsafe fn with_hasher_generator<H>(self, gen: fn() -> H) -> Builder<H>
+    pub unsafe fn with_hasher_generator<H>(self, gen_hasher: fn() -> H) -> Builder<H>
     where
         H: BuildHasher,
     {
         Builder {
             capacity: self.capacity,
-            hasher: HasherGen::Generate(gen),
+            hasher: HasherGen::Generate(gen_hasher),
         }
     }
 
@@ -201,7 +202,7 @@ enum HasherGen<S> {
 impl<S> HasherGen<S> {
     fn generate(self) -> (S, S) {
         match self {
-            Self::Generate(gen) => (gen(), gen()),
+            Self::Generate(gen_hasher) => (gen_hasher(), gen_hasher()),
             Self::MakeBoth(make_both) => make_both(),
             Self::Clone(hasher, clone) => (clone(&hasher), hasher),
         }

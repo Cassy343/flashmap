@@ -1,16 +1,16 @@
-#[cfg(loom)]
-pub use loom::{hint, thread};
+#[cfg(feature = "loom")]
+pub use loom::thread;
 
-#[cfg(not(loom))]
-pub use std::{hint, sync, thread};
+#[cfg(not(feature = "loom"))]
+pub use std::{sync, thread};
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 pub mod sync {
     pub use loom::sync::*;
     pub use std::sync::PoisonError;
 }
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 pub mod cell {
     pub use loom::cell::Cell;
     use std::{
@@ -82,7 +82,7 @@ pub mod cell {
     }
 }
 
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 pub mod cell {
     pub use std::cell::Cell;
     use std::{
