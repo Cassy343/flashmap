@@ -12,6 +12,8 @@ readme = "README.md"
 keywords = ["map", "concurrent", "hashmap"]
 categories = ["concurrency", "data-structures"]
 
+exclude = [".github/*", "bench-graphs/*", "hooks/*", "dev_setup.sh", "test.sh"]
+
 [dependencies]
 num_cpus = "1"
 slab = "0.4.12"
