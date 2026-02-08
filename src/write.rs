@@ -10,12 +10,12 @@ use std::{
 use hashbrown::hash_map::RawEntryMut;
 
 use crate::{
+    Map, View,
     core::Core,
     loom::cell::UnsafeCell,
     loom::sync::Arc,
     util::{Alias, BorrowHelper},
     view::sealed::ReadAccess,
-    Map, View,
 };
 
 static NEXT_WRITER_UID: AtomicUsize = AtomicUsize::new(1);
@@ -173,7 +173,7 @@ where
     }
 
     /// Returns a function which can safely reclaim leaked values. This is useful for reclaiming
-    /// multiple leaked values while only performign the necessary synchronization once.
+    /// multiple leaked values while only performing the necessary synchronization once.
     ///
     /// # Panics
     ///
@@ -229,7 +229,7 @@ where
         {
             match operation {
                 RawOperation::InsertUnique(key, value) => {
-                    map.insert_unique_unchecked(key, value);
+                    unsafe { map.insert_unique_unchecked(key, value) };
                 }
                 RawOperation::Replace(ref key, value) => {
                     let slot =
@@ -536,9 +536,9 @@ impl<'a, K, V> Evicted<'a, K, V> {
     /// write.guard().drop_lazily(b);
     /// ```
     pub fn leak(evicted: Self) -> Leaked<V> {
-        evicted
-            .operations
-            .with_mut(|ptr| unsafe { (*ptr).get_unchecked_mut(evicted.operation) }.make_leaky());
+        evicted.operations.with_mut(|ptr| {
+            unsafe { (&mut (*ptr)).get_unchecked_mut(evicted.operation) }.make_leaky()
+        });
 
         evicted.leaked
     }

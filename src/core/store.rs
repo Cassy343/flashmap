@@ -1,6 +1,6 @@
+use crate::Map;
 use crate::loom::cell::UnsafeCell;
 use crate::util::CachePadded;
-use crate::Map;
 use std::{marker::PhantomData, mem, ptr::NonNull};
 
 #[repr(usize)]

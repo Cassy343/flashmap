@@ -1,12 +1,12 @@
 use std::{collections::hash_map::RandomState, ptr::NonNull};
 
 use crate::{
+    Map, View,
     core::{Core, MapIndex, RefCount, SharedMapAccess},
     loom::cell::UnsafeCell,
     loom::sync::Arc,
     util::unlikely,
     view::sealed::ReadAccess,
-    Map, View,
 };
 
 /// A read handle for the map.

@@ -1,8 +1,8 @@
 [package]
 name = "flashmap"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Cassy343"]
-edition = "2021"
+edition = "2024"
 
 description = "A lock-free eventually consistent concurrent hash map."
 repository = "https://github.com/Cassy343/flashmap"
@@ -12,21 +12,26 @@ readme = "README.md"
 keywords = ["map", "concurrent", "hashmap"]
 categories = ["concurrency", "data-structures"]
 
+exclude = [".github/*", "bench-graphs/*", "hooks/*", "dev_setup.sh", "test.sh"]
+
 [dependencies]
 num_cpus = "1"
-slab = "0.4.7"
+slab = "0.4.12"
 
 [dependencies.hashbrown]
-version = "0.12.3"
+version = "0.16.1"
 default-features = false
-features = ["inline-more"]
+features = ["inline-more", "raw-entry"]
 
-[target.'cfg(loom)'.dependencies]
-loom = { version = "0.5.6", features = ["checkpoint"] }
+[dependencies.loom]
+version = "0.7.2"
+features = ["checkpoint"]
+optional = true
 
 [features]
 default = []
 nightly = []
+loom = ["dep:loom"]
 
 [profile.loomtest]
 inherits = "release"

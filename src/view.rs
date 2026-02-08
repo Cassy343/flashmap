@@ -99,10 +99,10 @@ where
     /// assert!(!guard.contains_key(&1));
     /// ```
     #[inline]
-    pub fn contains_key<Q: ?Sized>(&self, key: &Q) -> bool
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q> + Eq + Hash,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.guard
             .with_map(|map| map.contains_key(BorrowHelper::new_ref(key)))
@@ -123,10 +123,10 @@ where
     /// assert!(guard.get("bananas").is_none());
     /// ```
     #[inline]
-    pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q> + Eq + Hash,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         self.guard
             .with_map(|map| map.get(BorrowHelper::new_ref(key)).map(Deref::deref))
@@ -155,7 +155,7 @@ where
     /// assert_eq!(result, i8::MAX);
     /// ```
     #[inline]
-    pub fn iter<'read>(&'read self) -> impl Iterator<Item = (&K, &V)> + '_
+    pub fn iter<'read>(&'read self) -> impl Iterator<Item = (&'read K, &'read V)> + 'read
     where
         (K, V): 'read,
     {
@@ -186,7 +186,7 @@ where
     /// assert_eq!(result, 111);
     /// ```
     #[inline]
-    pub fn keys<'read>(&'read self) -> impl Iterator<Item = &K> + '_
+    pub fn keys<'read>(&'read self) -> impl Iterator<Item = &'read K> + 'read
     where
         (K, V): 'read,
     {
@@ -216,7 +216,7 @@ where
     /// assert_eq!(result, 111);
     /// ```
     #[inline]
-    pub fn values<'read>(&'read self) -> impl Iterator<Item = &V> + '_
+    pub fn values<'read>(&'read self) -> impl Iterator<Item = &'read V> + 'read
     where
         (K, V): 'read,
     {

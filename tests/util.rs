@@ -1,8 +1,8 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 pub use loom::*;
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 pub use std::{sync, thread};
 
 pub use track_access::*;
@@ -11,13 +11,13 @@ pub fn maybe_loom_model<F>(test: F)
 where
     F: Fn() + Send + Sync + 'static,
 {
-    #[cfg(loom)]
+    #[cfg(feature = "loom")]
     loom::model(test);
-    #[cfg(not(loom))]
+    #[cfg(not(feature = "loom"))]
     test();
 }
 
-#[cfg(loom)]
+#[cfg(feature = "loom")]
 mod track_access {
     use loom::{alloc::Track, cell::UnsafeCell};
     use std::{
@@ -68,7 +68,7 @@ mod track_access {
     }
 }
 
-#[cfg(not(loom))]
+#[cfg(not(feature = "loom"))]
 mod track_access {
     use std::borrow::Borrow;
     use std::hash::Hash;
